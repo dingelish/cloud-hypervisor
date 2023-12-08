@@ -217,6 +217,12 @@ pub enum HypervisorVmError {
     ///
     #[error("Failed to initialize memory region TDX: {0}")]
     InitMemRegionTdx(#[source] std::io::Error),
+    #[cfg(feature = "tdx")]
+    ///
+    /// Failed to create guest memfd
+    ///
+    #[error("Failed to create guest memfd: {0}")]
+    CreateGuestMemfd(#[source] anyhow::Error),
     ///
     /// Create Vgic error
     ///
@@ -366,6 +372,11 @@ pub trait Vm: Send + Sync + Any {
         _size: u64,
         _measure: bool,
     ) -> Result<()> {
+        unimplemented!()
+    }
+    #[cfg(feature = "tdx")]
+    /// Create an anonymous file that is bound to its owning guest
+    fn create_guest_memfd(&self, _size: u64) -> Result<File> {
         unimplemented!()
     }
     /// Downcast to the underlying hypervisor VM type

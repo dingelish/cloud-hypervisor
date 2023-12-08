@@ -31,6 +31,8 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 #[cfg(target_arch = "x86_64")]
 use std::fs::File;
+#[cfg(feature = "tdx")]
+use std::os::fd::FromRawFd;
 #[cfg(target_arch = "x86_64")]
 use std::os::unix::io::AsRawFd;
 #[cfg(feature = "tdx")]
@@ -93,7 +95,10 @@ use std::mem;
 use thiserror::Error;
 use vfio_ioctls::VfioDeviceFd;
 #[cfg(feature = "tdx")]
-use vmm_sys_util::{ioctl::ioctl_with_val, ioctl_ioc_nr, ioctl_iowr_nr};
+use vmm_sys_util::{
+    ioctl::{ioctl_with_ref, ioctl_with_val},
+    ioctl_ioc_nr, ioctl_iowr_nr,
+};
 ///
 /// Export generically-named wrappers of kvm-bindings for Unix-based platforms
 ///
@@ -118,6 +123,8 @@ const TDG_VP_VMCALL_INVALID_OPERAND: u64 = 0x8000000000000000;
 
 #[cfg(feature = "tdx")]
 ioctl_iowr_nr!(KVM_MEMORY_ENCRYPT_OP, KVMIO, 0xba, std::os::raw::c_ulong);
+#[cfg(feature = "tdx")]
+ioctl_iowr_nr!(KVM_CREATE_GUEST_MEMFD, KVMIO, 0xd4, KvmCreateGuestMemfd);
 
 #[cfg(feature = "tdx")]
 #[repr(u32)]
@@ -213,6 +220,15 @@ pub struct KvmTdxExitVmcall {
     pub out_r8: u64,
     pub out_r9: u64,
     pub out_rdx: u64,
+}
+
+#[cfg(feature = "tdx")]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+struct KvmCreateGuestMemfd {
+    pub size: u64,
+    pub flags: u64,
+    pub reserved: [u64; 6usize],
 }
 
 impl From<kvm_userspace_memory_region> for UserMemoryRegion {
@@ -889,6 +905,36 @@ impl vm::Vm for KvmVm {
             &data as *const _ as u64,
         )
         .map_err(vm::HypervisorVmError::InitMemRegionTdx)
+    }
+
+    #[cfg(feature = "tdx")]
+    /// Create an anonymous file that is bound to its owning guest
+    fn create_guest_memfd(&self, size: u64) -> vm::Result<File> {
+        // KVM_CREATE_GUEST_MEMFD creates an anonymous file and returns a file descriptor
+        // that refers to it.  guest_memfd files are roughly analogous to files created
+        // via memfd_create(), e.g. guest_memfd files live in RAM, have volatile storage,
+        // and are automatically released when the last reference is dropped.  Unlike
+        // "regular" memfd_create() files, guest_memfd files are bound to their owning
+        // virtual machine (see below), cannot be mapped, read, or written by userspace,
+        // and cannot be resized  (guest_memfd files do however support PUNCH_HOLE).
+        let gmem = KvmCreateGuestMemfd {
+            size,
+            flags: 0,
+            ..Default::default()
+        };
+
+        // SAFETY: self.fd is valid and return value is checked
+        let fd = unsafe { ioctl_with_ref(&self.fd, KVM_CREATE_GUEST_MEMFD(), &gmem) };
+
+        if fd < 0 {
+            return Err(vm::HypervisorVmError::CreateGuestMemfd(
+                std::io::Error::last_os_error().into(),
+            ));
+        }
+
+        // SAFETY: fd is valid
+        let f = unsafe { File::from_raw_fd(fd) };
+        Ok(f)
     }
 
     /// Downcast to the underlying KvmVm type
