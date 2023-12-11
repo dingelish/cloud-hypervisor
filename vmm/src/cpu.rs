@@ -745,7 +745,7 @@ impl CpuManager {
         &mut self,
         memory_manager: &Arc<Mutex<MemoryManager>>,
         hypervisor: &Arc<dyn hypervisor::Hypervisor>,
-        #[cfg(feature = "tdx")] tdx: bool,
+        #[cfg(feature = "tdx")] tdx: arch::TdxCpuidConfig,
     ) -> Result<()> {
         let sgx_epc_sections = memory_manager
             .lock()

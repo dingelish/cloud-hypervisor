@@ -930,7 +930,10 @@ impl Vmm {
                     phys_bits,
                     kvm_hyperv: vm_config.lock().unwrap().cpus.kvm_hyperv,
                     #[cfg(feature = "tdx")]
-                    tdx: false,
+                    tdx: arch::TdxCpuidConfig {
+                        enabled: false,
+                        caps: None,
+                    },
                     amx,
                 },
             )
@@ -1070,7 +1073,10 @@ impl Vmm {
                     phys_bits,
                     kvm_hyperv: vm_config.cpus.kvm_hyperv,
                     #[cfg(feature = "tdx")]
-                    tdx: false,
+                    tdx: arch::TdxCpuidConfig {
+                        enabled: false,
+                        caps: None,
+                    },
                     amx: vm_config.cpus.features.amx,
                 },
             )

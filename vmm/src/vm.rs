@@ -272,6 +272,10 @@ pub enum Error {
     AllocatingTdvfMemory(crate::memory_manager::Error),
 
     #[cfg(feature = "tdx")]
+    #[error("Error getting TDX Capabilities: {0}")]
+    GetTdxCapabilities(#[source] hypervisor::HypervisorError),
+
+    #[cfg(feature = "tdx")]
     #[error("Error enabling TDX VM: {0}")]
     InitializeTdxVm(#[source] hypervisor::HypervisorVmError),
 
@@ -550,6 +554,17 @@ impl Vm {
         )
         .map_err(Error::CpuManager)?;
 
+        #[cfg(feature = "tdx")]
+        let tdx_caps = if tdx_enabled {
+            let caps = hypervisor
+                .tdx_capabilities()
+                .map_err(Error::GetTdxCapabilities)?;
+            info!("TDX capabilities {:#?}", caps);
+            Some(caps)
+        } else {
+            None
+        };
+
         #[cfg(target_arch = "x86_64")]
         cpu_manager
             .lock()
@@ -558,7 +573,10 @@ impl Vm {
                 &memory_manager,
                 &hypervisor,
                 #[cfg(feature = "tdx")]
-                tdx_enabled,
+                arch::TdxCpuidConfig {
+                    enabled: tdx_enabled,
+                    caps: tdx_caps,
+                },
             )
             .map_err(Error::CpuManager)?;
 
@@ -2491,7 +2509,10 @@ impl Snapshottable for Vm {
                     phys_bits,
                     kvm_hyperv: self.config.lock().unwrap().cpus.kvm_hyperv,
                     #[cfg(feature = "tdx")]
-                    tdx: false,
+                    tdx: arch::TdxCpuidConfig {
+                        enabled: false,
+                        caps: None,
+                    },
                     amx,
                 },
             )

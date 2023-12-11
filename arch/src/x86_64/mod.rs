@@ -16,6 +16,8 @@ use crate::GuestMemoryMmap;
 use crate::InitramfsConfig;
 use crate::RegionType;
 use hypervisor::arch::x86::{CpuIdEntry, CPUID_FLAG_VALID_INDEX};
+#[cfg(feature = "tdx")]
+use hypervisor::kvm::TdxCapabilities;
 use hypervisor::{CpuVendor, HypervisorCpuError, HypervisorError};
 use linux_loader::loader::elf::start_info::{
     hvm_memmap_table_entry, hvm_modlist_entry, hvm_start_info,
@@ -115,12 +117,18 @@ impl SgxEpcRegion {
     }
 }
 
+#[cfg(feature = "tdx")]
+pub struct TdxCpuidConfig {
+    pub enabled: bool,
+    pub caps: Option<TdxCapabilities>,
+}
+
 pub struct CpuidConfig {
     pub sgx_epc_sections: Option<Vec<SgxEpcSection>>,
     pub phys_bits: u8,
     pub kvm_hyperv: bool,
     #[cfg(feature = "tdx")]
-    pub tdx: bool,
+    pub tdx: TdxCpuidConfig,
     pub amx: bool,
 }
 
@@ -176,10 +184,6 @@ pub enum Error {
 
     // Error getting CPU TSC frequency
     GetTscFrequency(HypervisorCpuError),
-
-    /// Error retrieving TDX capabilities through the hypervisor (kvm/mshv) API
-    #[cfg(feature = "tdx")]
-    TdxCapabilities(HypervisorError),
 }
 
 impl From<Error> for super::Error {
@@ -637,17 +641,6 @@ pub fn generate_common_cpuid(
         update_cpuid_sgx(&mut cpuid, sgx_epc_sections)?;
     }
 
-    #[cfg(feature = "tdx")]
-    let tdx_capabilities = if config.tdx {
-        let caps = hypervisor
-            .tdx_capabilities()
-            .map_err(Error::TdxCapabilities)?;
-        info!("TDX capabilities {:#?}", caps);
-        Some(caps)
-    } else {
-        None
-    };
-
     // Update some existing CPUID
     for entry in cpuid.as_mut_slice().iter_mut() {
         match entry.function {
@@ -660,7 +653,7 @@ pub fn generate_common_cpuid(
             0xd =>
             {
                 #[cfg(feature = "tdx")]
-                if let Some(caps) = &tdx_capabilities {
+                if let Some(caps) = &config.tdx.caps {
                     let xcr0_mask: u64 = 0x82ff;
                     let xss_mask: u64 = !xcr0_mask;
                     if entry.index == 0 {
@@ -697,7 +690,7 @@ pub fn generate_common_cpuid(
             0x4000_0001 => {
                 // These features are not supported by TDX
                 #[cfg(feature = "tdx")]
-                if config.tdx {
+                if config.tdx.enabled {
                     entry.eax &= !(1 << KVM_FEATURE_CLOCKSOURCE_BIT
                         | 1 << KVM_FEATURE_CLOCKSOURCE2_BIT
                         | 1 << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT

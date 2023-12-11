@@ -96,6 +96,9 @@ pub use x86_64::{
     EntryPoint, _NSIG,
 };
 
+#[cfg(feature = "tdx")]
+pub use x86_64::TdxCpuidConfig;
+
 /// Safe wrapper for `sysconf(_SC_PAGESIZE)`.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
