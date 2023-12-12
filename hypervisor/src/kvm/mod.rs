@@ -122,6 +122,10 @@ const TDG_VP_VMCALL_SUCCESS: u64 = 0;
 const TDG_VP_VMCALL_INVALID_OPERAND: u64 = 0x8000000000000000;
 #[cfg(feature = "tdx")]
 const KVM_MEM_PRIVATE: u32 = 4;
+#[cfg(feature = "tdx")]
+pub const KVM_X86_TDX_VM: u32 = 2;
+#[cfg(feature = "tdx")]
+pub const KVM_X86_DEFAULT_VM: u32 = 0;
 
 #[cfg(feature = "tdx")]
 ioctl_iowr_nr!(KVM_MEMORY_ENCRYPT_OP, KVMIO, 0xba, std::os::raw::c_ulong);

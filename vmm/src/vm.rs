@@ -900,11 +900,13 @@ impl Vm {
 
         cfg_if::cfg_if! {
             if #[cfg(feature = "tdx")] {
-                // Passing KVM_X86_TDX_VM: 1 if tdx_enabled is true
-                // Otherwise KVM_X86_LEGACY_VM: 0
-                // value of tdx_enabled is mapped to KVM_X86_TDX_VM or KVM_X86_LEGACY_VM
+                let vm_type = if tdx_enabled {
+                    hypervisor::kvm::KVM_X86_TDX_VM
+                } else {
+                    hypervisor::kvm::KVM_X86_DEFAULT_VM
+                };
                 let vm = hypervisor
-                    .create_vm_with_type(u64::from(tdx_enabled))
+                    .create_vm_with_type(vm_type as u64)
                     .unwrap();
             } else if #[cfg(feature = "sev_snp")] {
                 // Passing SEV_SNP_ENABLED: 1 if sev_snp_enabled is true
