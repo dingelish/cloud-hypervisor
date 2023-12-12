@@ -273,7 +273,7 @@ pub enum Error {
 
     #[cfg(feature = "tdx")]
     #[error("Error getting TDX Capabilities: {0}")]
-    GetTdxCapabilities(#[source] hypervisor::HypervisorError),
+    GetTdxCapabilities(#[source] hypervisor::HypervisorVmError),
 
     #[cfg(feature = "tdx")]
     #[error("Error enabling TDX VM: {0}")]
@@ -556,9 +556,7 @@ impl Vm {
 
         #[cfg(feature = "tdx")]
         let tdx_caps = if tdx_enabled {
-            let caps = hypervisor
-                .tdx_capabilities()
-                .map_err(Error::GetTdxCapabilities)?;
+            let caps = vm.tdx_capabilities().map_err(Error::GetTdxCapabilities)?;
             info!("TDX capabilities {:#?}", caps);
             Some(caps)
         } else {

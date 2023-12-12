@@ -962,6 +962,27 @@ impl vm::Vm for KvmVm {
     }
 
     ///
+    /// Retrieve TDX capabilities
+    ///
+    #[cfg(feature = "tdx")]
+    fn tdx_capabilities(&self) -> vm::Result<TdxCapabilities> {
+        let data = TdxCapabilities {
+            nr_cpuid_configs: TDX_MAX_NR_CPUID_CONFIGS as u32,
+            ..Default::default()
+        };
+
+        tdx_command(
+            &self.fd.as_raw_fd(),
+            TdxCommand::Capabilities,
+            0,
+            &data as *const _ as u64,
+        )
+        .map_err(|e| vm::HypervisorVmError::TdxCapabilities(e.into()))?;
+
+        Ok(data)
+    }
+
+    ///
     /// Initialize TDX for this VM
     ///
     #[cfg(feature = "tdx")]
@@ -1303,27 +1324,6 @@ impl hypervisor::Hypervisor for KvmHypervisor {
     ///
     fn get_host_ipa_limit(&self) -> i32 {
         self.kvm.get_host_ipa_limit()
-    }
-
-    ///
-    /// Retrieve TDX capabilities
-    ///
-    #[cfg(feature = "tdx")]
-    fn tdx_capabilities(&self) -> hypervisor::Result<TdxCapabilities> {
-        let data = TdxCapabilities {
-            nr_cpuid_configs: TDX_MAX_NR_CPUID_CONFIGS as u32,
-            ..Default::default()
-        };
-
-        tdx_command(
-            &self.kvm.as_raw_fd(),
-            TdxCommand::Capabilities,
-            0,
-            &data as *const _ as u64,
-        )
-        .map_err(|e| hypervisor::HypervisorError::TdxCapabilities(e.into()))?;
-
-        Ok(data)
     }
 
     ///

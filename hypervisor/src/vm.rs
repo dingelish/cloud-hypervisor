@@ -15,6 +15,8 @@ use crate::arch::aarch64::gic::{Vgic, VgicConfig};
 #[cfg(feature = "tdx")]
 use crate::arch::x86::CpuIdEntry;
 use crate::cpu::Vcpu;
+#[cfg(feature = "tdx")]
+use crate::kvm::TdxCapabilities;
 #[cfg(target_arch = "x86_64")]
 use crate::ClockData;
 use crate::UserMemoryRegion;
@@ -199,6 +201,11 @@ pub enum HypervisorVmError {
     #[error("Failed to initialize SEV-SNP: {0}")]
     InitializeSevSnp(#[source] std::io::Error),
 
+    ///
+    /// Failed to retrieve TDX capabilities
+    ///
+    #[error("Failed to retrieve TDX capabilities:{0}")]
+    TdxCapabilities(#[source] anyhow::Error),
     #[cfg(feature = "tdx")]
     ///
     /// Error initializing TDX on the VM
@@ -354,6 +361,13 @@ pub trait Vm: Send + Sync + Any {
     #[cfg(feature = "sev_snp")]
     /// Initialize SEV-SNP on this VM
     fn sev_snp_init(&self) -> Result<()> {
+        unimplemented!()
+    }
+    ///
+    /// Retrieve TDX capabilities
+    ///
+    #[cfg(feature = "tdx")]
+    fn tdx_capabilities(&self) -> Result<TdxCapabilities> {
         unimplemented!()
     }
     #[cfg(feature = "tdx")]
