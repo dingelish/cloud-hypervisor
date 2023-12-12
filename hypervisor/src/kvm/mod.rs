@@ -162,7 +162,7 @@ const TDX_MAX_NR_CPUID_CONFIGS: usize = 6;
 
 #[cfg(feature = "tdx")]
 #[repr(C)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct TdxCpuidConfig {
     pub leaf: u32,
     pub sub_leaf: u32,
@@ -174,15 +174,34 @@ pub struct TdxCpuidConfig {
 
 #[cfg(feature = "tdx")]
 #[repr(C)]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TdxCapabilities {
     pub attrs_fixed0: u64,
     pub attrs_fixed1: u64,
     pub xfam_fixed0: u64,
     pub xfam_fixed1: u64,
-    pub nr_cpuid_configs: u32,
+    pub supported_gpaw: u32,
     pub padding: u32,
+    pub reserved: [u64; 251],
+    pub nr_cpuid_configs: u32,
     pub cpuid_configs: [TdxCpuidConfig; TDX_MAX_NR_CPUID_CONFIGS],
+}
+
+#[cfg(feature = "tdx")]
+impl Default for TdxCapabilities {
+    fn default() -> Self {
+        TdxCapabilities {
+            attrs_fixed0: 0,
+            attrs_fixed1: 0,
+            xfam_fixed0: 0,
+            xfam_fixed1: 0,
+            supported_gpaw: 0,
+            padding: 0,
+            reserved: [0; 251],
+            nr_cpuid_configs: 0,
+            cpuid_configs: [Default::default(); TDX_MAX_NR_CPUID_CONFIGS],
+        }
+    }
 }
 
 #[cfg(feature = "tdx")]
