@@ -349,6 +349,10 @@ pub enum Error {
     #[cfg(feature = "tdx")]
     /// Failed to create guest memfd
     GuestMemfdCreate(hypervisor::HypervisorVmError),
+
+    #[cfg(feature = "tdx")]
+    /// Failed to set memory attributes to private
+    SetMemoryAttributePrivate(hypervisor::HypervisorVmError),
 }
 
 const ENABLE_FLAG: usize = 0;
@@ -1835,6 +1839,12 @@ impl MemoryManager {
         self.vm
             .create_user_memory_region(mem_region)
             .map_err(Error::CreateUserMemoryRegion)?;
+        #[cfg(feature = "tdx")]
+        if gmem_fo.is_some() {
+            self.vm
+                .set_memory_attributes_private(guest_phys_addr, memory_size)
+                .map_err(Error::SetMemoryAttributePrivate)?;
+        }
 
         // SAFETY: the address and size are valid since the
         // mmap succeeded.
