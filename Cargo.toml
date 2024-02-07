@@ -54,6 +54,7 @@ zbus = { version = "3.11.1", optional = true }
 [patch.crates-io]
 kvm-bindings = { git = "https://github.com/cloud-hypervisor/kvm-bindings", branch = "ch-v0.7.0" }
 versionize_derive = { git = "https://github.com/cloud-hypervisor/versionize_derive", branch = "ch-0.1.6" }
+vm-memory = { git = "https://github.com/likebreath/vm-memory", branch = "0207/kvm_guest_memfd" }
 
 [dev-dependencies]
 dirs = "5.0.0"
