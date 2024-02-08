@@ -3145,6 +3145,10 @@ pub fn test_vm() {
             region.as_ptr() as u64,
             false,
             false,
+            #[cfg(feature = "tdx")]
+            None,
+            #[cfg(feature = "tdx")]
+            None,
         );
 
         vm.create_user_memory_region(mem_region)

@@ -726,6 +726,10 @@ impl DeviceRelocation for AddressManager {
                             shm_regions.host_addr,
                             false,
                             false,
+                            #[cfg(feature = "tdx")]
+                            None,
+                            #[cfg(feature = "tdx")]
+                            None,
                         );
 
                         self.vm.remove_user_memory_region(mem_region).map_err(|e| {
@@ -743,6 +747,10 @@ impl DeviceRelocation for AddressManager {
                             shm_regions.host_addr,
                             false,
                             false,
+                            #[cfg(feature = "tdx")]
+                            None,
+                            #[cfg(feature = "tdx")]
+                            None,
                         );
 
                         self.vm.create_user_memory_region(mem_region).map_err(|e| {
@@ -2989,7 +2997,17 @@ impl DeviceManager {
             .memory_manager
             .lock()
             .unwrap()
-            .create_userspace_mapping(region_base, region_size, host_addr, false, false, false)
+            .create_userspace_mapping(
+                region_base,
+                region_size,
+                host_addr,
+                false,
+                false,
+                false,
+                // Note: TDX does not support virtio-pmem
+                #[cfg(feature = "tdx")]
+                None,
+            )
             .map_err(DeviceManagerError::MemoryManager)?;
 
         let mapping = virtio_devices::UserspaceMapping {
