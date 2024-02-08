@@ -200,6 +200,9 @@ pub struct MemoryManager {
     pub acpi_address: Option<GuestAddress>,
     #[cfg(target_arch = "aarch64")]
     uefi_flash: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
+
+    #[cfg(feature = "tdx")]
+    tdx_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -342,6 +345,10 @@ pub enum Error {
 
     /// Memory size is misaligned with default page size or its hugepage size
     MisalignedMemorySize,
+
+    #[cfg(feature = "tdx")]
+    /// Failed to create guest memfd
+    GuestMemfdCreate(hypervisor::HypervisorVmError),
 }
 
 const ENABLE_FLAG: usize = 0;
@@ -533,6 +540,8 @@ impl MemoryManager {
         zones: &[MemoryZoneConfig],
         prefault: Option<bool>,
         thp: bool,
+        #[cfg(feature = "tdx")] tdx_enabled: bool,
+        #[cfg(feature = "tdx")] vm: Arc<dyn hypervisor::Vm>,
     ) -> Result<(Vec<Arc<GuestRegionMmap>>, MemoryZones), Error> {
         let mut zone_iter = zones.iter();
         let mut mem_regions = Vec::new();
@@ -602,6 +611,10 @@ impl MemoryManager {
                     zone.host_numa_node,
                     None,
                     thp,
+                    #[cfg(feature = "tdx")]
+                    tdx_enabled,
+                    #[cfg(feature = "tdx")]
+                    vm.clone(),
                 )?;
 
                 // Add region to the list of regions associated with the
@@ -660,6 +673,8 @@ impl MemoryManager {
         prefault: Option<bool>,
         mut existing_memory_files: HashMap<u32, File>,
         thp: bool,
+        #[cfg(feature = "tdx")] tdx_enabled: bool,
+        #[cfg(feature = "tdx")] vm: Arc<dyn hypervisor::Vm>,
     ) -> Result<(Vec<Arc<GuestRegionMmap>>, MemoryZones), Error> {
         let mut memory_regions = Vec::new();
         let mut memory_zones = HashMap::new();
@@ -683,6 +698,10 @@ impl MemoryManager {
                         zone_config.host_numa_node,
                         existing_memory_files.remove(&guest_ram_mapping.slot),
                         thp,
+                        #[cfg(feature = "tdx")]
+                        tdx_enabled,
+                        #[cfg(feature = "tdx")]
+                        vm.clone(),
                     )?;
                     memory_regions.push(Arc::clone(&region));
                     if let Some(memory_zone) = memory_zones.get_mut(&guest_ram_mapping.zone_id) {
@@ -1020,6 +1039,10 @@ impl MemoryManager {
                 prefault,
                 existing_memory_files.unwrap_or_default(),
                 config.thp,
+                #[cfg(feature = "tdx")]
+                tdx_enabled,
+                #[cfg(feature = "tdx")]
+                vm.clone(),
             )?;
             let guest_memory =
                 GuestMemoryMmap::from_arc_regions(regions).map_err(Error::GuestMemory)?;
@@ -1056,8 +1079,16 @@ impl MemoryManager {
                 })
                 .collect();
 
-            let (mem_regions, mut memory_zones) =
-                Self::create_memory_regions_from_zones(&ram_regions, &zones, prefault, config.thp)?;
+            let (mem_regions, mut memory_zones) = Self::create_memory_regions_from_zones(
+                &ram_regions,
+                &zones,
+                prefault,
+                config.thp,
+                #[cfg(feature = "tdx")]
+                tdx_enabled,
+                #[cfg(feature = "tdx")]
+                vm.clone(),
+            )?;
 
             let mut guest_memory =
                 GuestMemoryMmap::from_arc_regions(mem_regions).map_err(Error::GuestMemory)?;
@@ -1104,6 +1135,10 @@ impl MemoryManager {
                                 zone.host_numa_node,
                                 None,
                                 config.thp,
+                                #[cfg(feature = "tdx")]
+                                tdx_enabled,
+                                #[cfg(feature = "tdx")]
+                                vm.clone(),
                             )?;
 
                             guest_memory = guest_memory
@@ -1231,6 +1266,8 @@ impl MemoryManager {
             #[cfg(target_arch = "aarch64")]
             uefi_flash: None,
             thp: config.thp,
+            #[cfg(feature = "tdx")]
+            tdx_enabled,
         };
 
         #[cfg(target_arch = "aarch64")]
@@ -1396,8 +1433,37 @@ impl MemoryManager {
         host_numa_node: Option<u32>,
         existing_memory_file: Option<File>,
         thp: bool,
+        #[cfg(feature = "tdx")] tdx_enabled: bool,
+        #[cfg(feature = "tdx")] vm: Arc<dyn hypervisor::Vm>,
     ) -> Result<Arc<GuestRegionMmap>, Error> {
         let mut mmap_flags = libc::MAP_NORESERVE;
+
+        #[cfg(feature = "tdx")]
+        if tdx_enabled {
+            assert!(backing_file.is_none() && existing_memory_file.is_none());
+            info!("TDX: Ignoring 'prefault', 'thp', and 'numa' configuration for TD VMs");
+
+            // Always enable MAP_SHARED with anonymous file otherwise we will trigger #4805
+            // because the MAP_PRIVATE will trigger CoW against the backing file with
+            // the VFIO pinning
+            mmap_flags |= libc::MAP_SHARED;
+
+            let fo = Some(Self::create_anonymous_file(size, hugepages, hugepage_size)?);
+            let guest_memfd = vm
+                .create_guest_memfd(size as u64)
+                .map_err(Error::GuestMemfdCreate)?;
+            let fo_private = Some(FileOffset::new(guest_memfd, 0));
+
+            let region = GuestRegionMmap::new_private(
+                MmapRegion::build(fo, size, libc::PROT_READ | libc::PROT_WRITE, mmap_flags)
+                    .map_err(Error::GuestMemoryRegion)?,
+                start_addr,
+                fo_private,
+            )
+            .map_err(Error::GuestMemory)?;
+
+            return Ok(Arc::new(region));
+        }
 
         // The duplication of mmap_flags ORing here is unfortunate but it also makes
         // the complexity of the handling clear.
@@ -1631,6 +1697,10 @@ impl MemoryManager {
             None,
             None,
             self.thp,
+            #[cfg(feature = "tdx")]
+            self.tdx_enabled,
+            #[cfg(feature = "tdx")]
+            self.vm.clone(),
         )?;
 
         // Map it into the guest
