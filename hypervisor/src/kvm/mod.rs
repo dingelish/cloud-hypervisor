@@ -138,6 +138,8 @@ ioctl_iow_nr!(
     0x49,
     KvmUserspaceMemoryRegion2
 );
+#[cfg(feature = "tdx")]
+ioctl_iow_nr!(KVM_SET_MEMORY_ATTRIBUTES, KVMIO, 0xd3, KvmMemoryAttributes);
 
 #[cfg(feature = "tdx")]
 #[repr(u32)]
@@ -276,6 +278,16 @@ pub struct KvmUserspaceMemoryRegion2 {
     pub guest_memfd_fd: u32,
     pub pad1: u32,
     pub pad2: [u64; 14usize],
+}
+
+#[cfg(feature = "tdx")]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct KvmMemoryAttributes {
+    pub address: u64,
+    pub size: u64,
+    pub attributes: u64,
+    pub flags: u64,
 }
 
 impl From<kvm_userspace_memory_region> for UserMemoryRegion {
@@ -1126,6 +1138,30 @@ impl vm::Vm for KvmVm {
         // SAFETY: fd is valid
         let f = unsafe { File::from_raw_fd(fd) };
         Ok(f)
+    }
+
+    #[cfg(feature = "tdx")]
+    /// Set memory attribute 'KVM_MEMORY_ATTRIBUTE_PRIVATE'
+    fn set_memory_attributes_private(&self, address: u64, size: u64) -> vm::Result<()> {
+        const KVM_MEMORY_ATTRIBUTE_PRIVATE: u32 = 8;
+
+        let attribute = KvmMemoryAttributes {
+            address,
+            size,
+            attributes: KVM_MEMORY_ATTRIBUTE_PRIVATE as u64,
+            flags: 0,
+        };
+
+        // SAFETY: Safe because guest regions are guaranteed not to overlap.
+        let ret = unsafe { ioctl_with_ref(&self.fd, KVM_SET_MEMORY_ATTRIBUTES(), &attribute) };
+
+        if ret < 0 {
+            return Err(vm::HypervisorVmError::SetMemoryAttribute(
+                std::io::Error::last_os_error().into(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Downcast to the underlying KvmVm type

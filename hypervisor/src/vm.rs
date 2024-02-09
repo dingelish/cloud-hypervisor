@@ -237,6 +237,11 @@ pub enum HypervisorVmError {
     #[error("Failed to create guest memfd: {0}")]
     CreateGuestMemfd(#[source] anyhow::Error),
     ///
+    /// Failed to set memory attribute
+    ///
+    #[error("Failed to set memory attributes: {0}")]
+    SetMemoryAttribute(#[source] anyhow::Error),
+    ///
     /// Create Vgic error
     ///
     #[error("Failed to create Vgic: {0}")]
@@ -400,6 +405,11 @@ pub trait Vm: Send + Sync + Any {
     #[cfg(feature = "tdx")]
     /// Create an anonymous file that is bound to its owning guest
     fn create_guest_memfd(&self, _size: u64) -> Result<File> {
+        unimplemented!()
+    }
+    #[cfg(feature = "tdx")]
+    /// Set memory attribute 'KVM_MEMORY_ATTRIBUTE_PRIVATE'
+    fn set_memory_attributes_private(&self, _guest_address: u64, _size: u64) -> Result<()> {
         unimplemented!()
     }
     /// Downcast to the underlying hypervisor VM type
