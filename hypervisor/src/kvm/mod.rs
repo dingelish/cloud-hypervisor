@@ -227,11 +227,11 @@ pub union KvmTdxExitU {
 
 #[cfg(feature = "tdx")]
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone, PartialEq)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct KvmTdxExitVmcall {
-    pub type_: u64,
-    pub subfunction: u64,
-    pub reg_mask: u64,
+    pub u1: KvmTdxExitVmcallU1,
+    pub u2: KvmTdxExitVmcallU2,
+    pub u3: KvmTdxExitVmcallU3,
     pub in_r12: u64,
     pub in_r13: u64,
     pub in_r14: u64,
@@ -242,7 +242,7 @@ pub struct KvmTdxExitVmcall {
     pub in_r8: u64,
     pub in_r9: u64,
     pub in_rdx: u64,
-    pub status_code: u64,
+    pub u4: KvmTdxExitVmcallU4,
     pub out_r11: u64,
     pub out_r12: u64,
     pub out_r13: u64,
@@ -254,6 +254,94 @@ pub struct KvmTdxExitVmcall {
     pub out_r8: u64,
     pub out_r9: u64,
     pub out_rdx: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union KvmTdxExitVmcallU1 {
+    pub in_rcx: u64,
+    pub reg_mask: u64,
+}
+impl Default for KvmTdxExitVmcallU1 {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: `MaybeUninit<T>` is guaranteed to have the same size and alignment as `T`
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+impl ::std::fmt::Debug for KvmTdxExitVmcallU1 {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "KvmTdxExitVmcallU1 {{ union }}")
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union KvmTdxExitVmcallU2 {
+    pub in_r10: u64,
+    pub type_: u64,
+}
+impl Default for KvmTdxExitVmcallU2 {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: `MaybeUninit<T>` is guaranteed to have the same size and alignment as `T`
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+impl ::std::fmt::Debug for KvmTdxExitVmcallU2 {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "KvmTdxExitVmcallU2 {{ union }}")
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union KvmTdxExitVmcallU3 {
+    pub in_r11: u64,
+    pub subfunction: u64,
+}
+impl Default for KvmTdxExitVmcallU3 {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: `MaybeUninit<T>` is guaranteed to have the same size and alignment as `T`
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+impl ::std::fmt::Debug for KvmTdxExitVmcallU3 {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "KvmTdxExitVmcallU3 {{ union }}")
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union KvmTdxExitVmcallU4 {
+    pub out_r10: u64,
+    pub status_code: u64,
+}
+impl Default for KvmTdxExitVmcallU4 {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: `MaybeUninit<T>` is guaranteed to have the same size and alignment as `T`
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+impl ::std::fmt::Debug for KvmTdxExitVmcallU4 {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "KvmTdxExitVmcallU4 {{ union }}")
+    }
 }
 
 #[cfg(feature = "tdx")]
@@ -2437,18 +2525,20 @@ impl cpu::Vcpu for KvmVcpu {
                 .vmcall
         };
 
-        tdx_vmcall.status_code = TDG_VP_VMCALL_INVALID_OPERAND;
-
-        if tdx_vmcall.type_ != 0 {
-            return Err(cpu::HypervisorCpuError::UnknownTdxVmCall);
-        }
-
-        match tdx_vmcall.subfunction {
-            TDG_VP_VMCALL_GET_QUOTE => Ok(TdxExitDetails::GetQuote),
-            TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT => {
-                Ok(TdxExitDetails::SetupEventNotifyInterrupt)
+        tdx_vmcall.u4.status_code = TDG_VP_VMCALL_INVALID_OPERAND;
+        // SAFETY: accessing a union field in a valid structure
+        unsafe {
+            if tdx_vmcall.u2.type_ != 0 {
+                return Err(cpu::HypervisorCpuError::UnknownTdxVmCall);
             }
-            _ => Err(cpu::HypervisorCpuError::UnknownTdxVmCall),
+
+            match tdx_vmcall.u3.subfunction {
+                TDG_VP_VMCALL_GET_QUOTE => Ok(TdxExitDetails::GetQuote),
+                TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT => {
+                    Ok(TdxExitDetails::SetupEventNotifyInterrupt)
+                }
+                _ => Err(cpu::HypervisorCpuError::UnknownTdxVmCall),
+            }
         }
     }
 
@@ -2466,7 +2556,7 @@ impl cpu::Vcpu for KvmVcpu {
                 .vmcall
         };
 
-        tdx_vmcall.status_code = match status {
+        tdx_vmcall.u4.status_code = match status {
             TdxExitStatus::Success => TDG_VP_VMCALL_SUCCESS,
             TdxExitStatus::InvalidOperand => TDG_VP_VMCALL_INVALID_OPERAND,
         };
