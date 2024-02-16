@@ -146,6 +146,12 @@ mod kvm {
     pub const KVM_CREATE_DEVICE: u64 = 0xc00c_aee0;
     pub const KVM_GET_REG_LIST: u64 = 0xc008_aeb0;
     pub const KVM_MEMORY_ENCRYPT_OP: u64 = 0xc008_aeba;
+    #[cfg(feature = "tdx")]
+    pub const KVM_CREATE_GUEST_MEMFD: u64 = 0xc040_aed4;
+    #[cfg(feature = "tdx")]
+    pub const KVM_SET_USER_MEMORY_REGION2: u64 = 0x40a0_ae49;
+    #[cfg(feature = "tdx")]
+    pub const KVM_SET_MEMORY_ATTRIBUTES: u64 = 0x4020_aed3;
 }
 
 #[cfg(feature = "kvm")]
@@ -245,6 +251,17 @@ fn create_vmm_ioctl_seccomp_rule_common_kvm() -> Result<Vec<SeccompRule>, Backen
         and![Cond::new(1, ArgLen::Dword, Eq, KVM_SET_REGS)?],
         and![Cond::new(1, ArgLen::Dword, Eq, KVM_SET_USER_MEMORY_REGION,)?],
         and![Cond::new(1, ArgLen::Dword, Eq, KVM_SET_VCPU_EVENTS,)?],
+        #[cfg(feature = "tdx")]
+        and![Cond::new(1, ArgLen::Dword, Eq, KVM_CREATE_GUEST_MEMFD)?],
+        #[cfg(feature = "tdx")]
+        and![Cond::new(
+            1,
+            ArgLen::Dword,
+            Eq,
+            KVM_SET_USER_MEMORY_REGION2
+        )?],
+        #[cfg(feature = "tdx")]
+        and![Cond::new(1, ArgLen::Dword, Eq, KVM_SET_MEMORY_ATTRIBUTES)?],
     ])
 }
 
@@ -655,6 +672,8 @@ fn create_vcpu_ioctl_seccomp_rule_kvm() -> Result<Vec<SeccompRule>, BackendError
         and![Cond::new(1, ArgLen::Dword, Eq, KVM_SET_GSI_ROUTING,)?],
         and![Cond::new(1, ArgLen::Dword, Eq, KVM_SET_USER_MEMORY_REGION,)?],
         and![Cond::new(1, ArgLen::Dword, Eq, KVM_RUN,)?],
+        #[cfg(feature = "tdx")]
+        and![Cond::new(1, ArgLen::Dword, Eq, KVM_SET_MEMORY_ATTRIBUTES)?],
     ])
 }
 
@@ -720,6 +739,8 @@ fn vcpu_thread_rules(
         (libc::SYS_dup, vec![]),
         (libc::SYS_exit, vec![]),
         (libc::SYS_epoll_ctl, vec![]),
+        #[cfg(feature = "tdx")]
+        (libc::SYS_fallocate, vec![]),
         (libc::SYS_fstat, vec![]),
         (libc::SYS_futex, vec![]),
         (libc::SYS_getrandom, vec![]),
