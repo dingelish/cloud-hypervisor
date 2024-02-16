@@ -1252,6 +1252,28 @@ impl vm::Vm for KvmVm {
         Ok(())
     }
 
+    #[cfg(feature = "tdx")]
+    /// Set memory attribute 'KVM_MEMORY_ATTRIBUTE_SHARED'
+    fn set_memory_attributes_shared(&self, address: u64, size: u64) -> vm::Result<()> {
+        let attribute = KvmMemoryAttributes {
+            address,
+            size,
+            attributes: 0,
+            flags: 0,
+        };
+
+        // SAFETY: Safe because guest regions are guaranteed not to overlap.
+        let ret = unsafe { ioctl_with_ref(&self.fd, KVM_SET_MEMORY_ATTRIBUTES(), &attribute) };
+
+        if ret < 0 {
+            return Err(vm::HypervisorVmError::SetMemoryAttribute(
+                std::io::Error::last_os_error().into(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Downcast to the underlying KvmVm type
     fn as_any(&self) -> &dyn Any {
         self

@@ -412,6 +412,11 @@ pub trait Vm: Send + Sync + Any {
     fn set_memory_attributes_private(&self, _guest_address: u64, _size: u64) -> Result<()> {
         unimplemented!()
     }
+    #[cfg(feature = "tdx")]
+    /// Set memory attribute 'KVM_MEMORY_ATTRIBUTE_SHARED'
+    fn set_memory_attributes_shared(&self, _guest_address: u64, _size: u64) -> Result<()> {
+        unimplemented!()
+    }
     /// Downcast to the underlying hypervisor VM type
     fn as_any(&self) -> &dyn Any;
     /// Import the isolated pages
