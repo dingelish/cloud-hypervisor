@@ -113,6 +113,8 @@ const KVM_CAP_SGX_ATTRIBUTE: u32 = 196;
 #[cfg(feature = "tdx")]
 const KVM_EXIT_TDX: u32 = 50;
 #[cfg(feature = "tdx")]
+const KVM_EXIT_MEMORY_FAULT: u32 = 100;
+#[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_GET_QUOTE: u64 = 0x10002;
 #[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT: u64 = 0x10004;
@@ -342,6 +344,14 @@ impl ::std::fmt::Debug for KvmTdxExitVmcallU4 {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         write!(f, "KvmTdxExitVmcallU4 {{ union }}")
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct KvmRunMemory {
+    pub flags: u64,
+    pub gpa: u64,
+    pub size: u64,
 }
 
 #[cfg(feature = "tdx")]
@@ -2039,6 +2049,8 @@ impl cpu::Vcpu for KvmVcpu {
                 VcpuExit::Hyperv => Ok(cpu::VmExit::Hyperv),
                 #[cfg(feature = "tdx")]
                 VcpuExit::Unsupported(KVM_EXIT_TDX) => Ok(cpu::VmExit::Tdx),
+                #[cfg(feature = "tdx")]
+                VcpuExit::Unsupported(KVM_EXIT_MEMORY_FAULT) => Ok(cpu::VmExit::MemoryFault),
                 VcpuExit::Debug(_) => Ok(cpu::VmExit::Debug),
 
                 r => Err(cpu::HypervisorCpuError::RunVcpu(anyhow!(
@@ -2582,6 +2594,23 @@ impl cpu::Vcpu for KvmVcpu {
             TdxExitStatus::Success => TDG_VP_VMCALL_SUCCESS,
             TdxExitStatus::InvalidOperand => TDG_VP_VMCALL_INVALID_OPERAND,
         };
+    }
+
+    ///
+    /// Handle KVM_EXIT_MEMORY_FAULT
+    ///
+    #[cfg(feature = "tdx")]
+    fn handle_memory_fault(&mut self) -> cpu::Result<()> {
+        let kvm_run = self.fd.get_kvm_run();
+        // SAFETY: accessing a union field in a valid structure
+        let details = unsafe {
+            &mut (*((&mut kvm_run.__bindgen_anon_1) as *mut kvm_run__bindgen_ty_1
+                as *mut KvmRunMemory))
+        };
+
+        debug!("Handle KVM_EXIT_MEMORY_FAULT: {:?}", details);
+
+        Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
