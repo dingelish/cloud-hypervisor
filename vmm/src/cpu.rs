@@ -1113,7 +1113,7 @@ impl CpuManager {
                                                         warn!("TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT not supported")
                                                     }
                                                 },
-                                                Err(e) => error!("Unexpected TDX VMCALL: {}", e),
+                                                Err(e) => error!("Unexpected TDX exit details: {}", e),
                                             }
                                             vcpu.set_tdx_status(TdxExitStatus::InvalidOperand);
                                         } else {

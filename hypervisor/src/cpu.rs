@@ -235,6 +235,12 @@ pub enum HypervisorCpuError {
     #[error("Failed to initialize TDX: {0}")]
     InitializeTdx(#[source] std::io::Error),
     ///
+    /// Unknown TDX exit type
+    ///
+    #[cfg(feature = "tdx")]
+    #[error("Unknown TDX exit type: {0}")]
+    UnknownTdxExitType(u32),
+    ///
     /// Unknown TDX VM call
     ///
     #[cfg(feature = "tdx")]

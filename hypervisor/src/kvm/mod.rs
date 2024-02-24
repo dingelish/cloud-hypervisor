@@ -2550,15 +2550,22 @@ impl cpu::Vcpu for KvmVcpu {
     ///
     #[cfg(feature = "tdx")]
     fn get_tdx_exit_details(&mut self) -> cpu::Result<TdxExitDetails> {
+        const KVM_EXIT_TDX_VMCALL: u32 = 1;
+
         let kvm_run = self.fd.get_kvm_run();
+
         // SAFETY: accessing a union field in a valid structure
-        let tdx_vmcall = unsafe {
+        let tdx_exit = unsafe {
             &mut (*((&mut kvm_run.__bindgen_anon_1) as *mut kvm_run__bindgen_ty_1
                 as *mut KvmTdxExit))
-                .u
-                .vmcall
         };
 
+        if tdx_exit.type_ != KVM_EXIT_TDX_VMCALL {
+            return Err(cpu::HypervisorCpuError::UnknownTdxExitType(tdx_exit.type_));
+        };
+
+        // SAFETY: accessing a union field in a valid structure
+        let tdx_vmcall = unsafe { &mut tdx_exit.u.vmcall };
         tdx_vmcall.u4.status_code = TDG_VP_VMCALL_INVALID_OPERAND;
         // SAFETY: accessing a union field in a valid structure
         unsafe {
