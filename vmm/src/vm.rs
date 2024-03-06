@@ -448,6 +448,14 @@ impl VmOps for VmOpsHandler {
         size: u64,
         shared_to_private: bool,
     ) -> result::Result<(), HypervisorVmError> {
+        // Ignore memory convertion to shared for 32bit PCI MMIO region
+        if !shared_to_private
+            && gpa >= arch::layout::MEM_32BIT_DEVICES_START.raw_value()
+            && gpa <= arch::layout::APIC_START.raw_value()
+        {
+            return Ok(());
+        }
+
         if shared_to_private {
             self.vm.set_memory_attributes_private(gpa, size)?;
         } else {
