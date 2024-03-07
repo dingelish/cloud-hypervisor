@@ -2608,7 +2608,7 @@ impl cpu::Vcpu for KvmVcpu {
     ///
     #[cfg(feature = "tdx")]
     fn handle_memory_fault(&mut self) -> cpu::Result<()> {
-        const KVM_MEMORY_EXIT_FLAG_PRIVATE: u64 = 1;
+        const KVM_MEMORY_EXIT_FLAG_PRIVATE: u64 = 1 << 3;
 
         let kvm_run = self.fd.get_kvm_run();
         // SAFETY: accessing a union field in a valid structure
