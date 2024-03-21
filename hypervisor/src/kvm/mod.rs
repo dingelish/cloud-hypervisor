@@ -26,6 +26,8 @@ use crate::HypervisorType;
 use crate::{arm64_core_reg_id, offset_of};
 use kvm_ioctls::{NoDatamatch, VcpuFd, VmFd};
 use std::any::Any;
+use std::mem;
+use std::io::Write;
 use std::collections::HashMap;
 #[cfg(target_arch = "aarch64")]
 use std::convert::TryInto;
@@ -95,7 +97,7 @@ use std::mem;
 use thiserror::Error;
 use vfio_ioctls::VfioDeviceFd;
 #[cfg(feature = "tdx")]
-use vmm_sys_util::{ioctl::ioctl_with_val, ioctl_ioc_nr, ioctl_iowr_nr};
+use vmm_sys_util::{ioctl::ioctl_with_val, ioctl_ioc_nr, ioctl_iowr_nr, ioctl_iow_nr};
 ///
 /// Export generically-named wrappers of kvm-bindings for Unix-based platforms
 ///
@@ -129,6 +131,11 @@ const TDG_VP_VMCALL_INVALID_OPERAND: u64 = 0x8000000000000000;
 
 #[cfg(feature = "tdx")]
 ioctl_iowr_nr!(KVM_MEMORY_ENCRYPT_OP, KVMIO, 0xba, std::os::raw::c_ulong);
+
+#[cfg(feature = "tdx")]
+ioctl_io_nr!(KVM_SET_TSC_KHZ, KVMIO, 0xa2);
+#[cfg(feature = "tdx")]
+ioctl_iow_nr!(KVM_ENABLE_CAP, KVMIO, 0xa3, kvm_enable_cap);
 
 #[cfg(feature = "tdx")]
 #[repr(u32)]
@@ -834,46 +841,74 @@ impl vm::Vm for KvmVm {
             .map_err(|e| vm::HypervisorVmError::GetDirtyLog(e.into()))
     }
 
+
     ///
     /// Initialize TDX for this VM
     ///
     #[cfg(feature = "tdx")]
     fn tdx_init(&self, cpuid: &[CpuIdEntry], max_vcpus: u32) -> vm::Result<()> {
         const TDX_ATTR_SEPT_VE_DISABLE: usize = 28;
+        let mut cpuid_vec: Vec<kvm_bindings::kvm_cpuid_entry2> = gen_hardcoded_cpuid_entries();
 
-        let mut cpuid: Vec<kvm_bindings::kvm_cpuid_entry2> =
-            cpuid.iter().map(|e| (*e).into()).collect();
-        cpuid.resize(256, kvm_bindings::kvm_cpuid_entry2::default());
-
+        // V13 definition
+        #[repr(C)]
+        struct KvmCpuid2 {
+            cpuid_nent: u32,
+            cpuid_padding: u32,
+            cpuid_entries: [kvm_bindings::kvm_cpuid_entry2; 57],
+        }
         #[repr(C)]
         struct TdxInitVm {
             attributes: u64,
-            max_vcpus: u32,
-            padding: u32,
-            mrconfigid: [u64; 6],
+            mrconfigid: [u64; 6], // sha384 digest
             mrowner: [u64; 6],
             mrownerconfig: [u64; 6],
-            cpuid_nent: u32,
-            cpuid_padding: u32,
-            cpuid_entries: [kvm_bindings::kvm_cpuid_entry2; 256],
+            reserved: [u64; 1004], // for future extensibility to make size = 8KB
+            cpuid: KvmCpuid2,
         }
+        info!("size of TdxInitVm is: {}", mem::size_of::<TdxInitVm>());
         let data = TdxInitVm {
-            attributes: 1 << TDX_ATTR_SEPT_VE_DISABLE,
-            max_vcpus,
-            padding: 0,
+            attributes: 268435456, //1 << TDX_ATTR_SEPT_VE_DISABLE,
             mrconfigid: [0; 6],
             mrowner: [0; 6],
             mrownerconfig: [0; 6],
-            cpuid_nent: cpuid.len() as u32,
-            cpuid_padding: 0,
-            cpuid_entries: cpuid.as_slice().try_into().unwrap(),
+            reserved: [0; 1004],
+            cpuid: KvmCpuid2 {
+                cpuid_nent: cpuid_vec.len() as u32,
+                cpuid_padding: 0,  // 8KB here
+                cpuid_entries: cpuid_vec.as_slice().try_into().unwrap(), // 57 * 40 = 2280 bytes
+            },
         };
 
+        let mut file = File::create("/tmp/tdx_init_vm_rs.blob").expect("Cannot create /tmp/tdx_init_vm_rs.blob");
+        let p = &data as * const _ as  * const u8;
+        let pslice = unsafe { std::slice::from_raw_parts(p, mem::size_of::<TdxInitVm>()) };
+        file.write_all(pslice).unwrap();
+        file.sync_all().unwrap();
+
+        info!("tdx_init, cpuid size = {}", cpuid_vec.len()); // should be 8192 + 2280
+
+        // set cap. values are dumped values
+        let mut cap = kvm_enable_cap {
+            cap: 188,
+            flags: 0,
+            ..Default::default()
+        };
+        cap.args[0] = 6;
+        self.fd
+            .enable_cap(&cap).unwrap();
+
+        // set tsc khz
+        unsafe { ioctl_with_val(&self.fd.as_raw_fd(), KVM_SET_TSC_KHZ(), 2700000u64) };
+
+        // send the dumped blob
+        let dumped_init_blob: Vec<u8> = std::fs::read("/tmp/init_vm.blob").unwrap();
         tdx_command(
             &self.fd.as_raw_fd(),
             TdxCommand::InitVm,
             0,
-            &data as *const _ as u64,
+            //&data as *const _ as u64,
+            dumped_init_blob.as_ptr() as *const _ as u64,
         )
         .map_err(vm::HypervisorVmError::InitializeTdx)
     }
@@ -923,6 +958,69 @@ impl vm::Vm for KvmVm {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+#[cfg(feature = "tdx")]
+fn gen_hardcoded_cpuid_entries() -> Vec<kvm_bindings::kvm_cpuid_entry2> {
+    vec![
+        kvm_bindings::kvm_cpuid_entry2 { function: 16, index: 0,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 17, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 18, index: 0,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 19, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 20, index: 0,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 21, index: 0,flags: 0,eax: 2,ebx: 152,ecx: 25000000,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 3, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 4, index: 0,flags: 1,eax: 67125537,ebx: 46137407,ecx: 63,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 1, index: 0,flags: 0,eax: 526072,ebx: 264192,ecx: 4143591939,edx: 529267711,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2, index: 0,flags: 6,eax: 16711425,ebx: 240,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 5, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 4, index: 3,flags: 1,eax: 67158371,ebx: 58720319,ecx: 114687,edx: 4,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 6, index: 0,flags: 0,eax: 4,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 2,flags: 1,eax: 256,ebx: 576,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 4, index: 2,flags: 1,eax: 67125571,ebx: 62914623,ecx: 2047,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 1,flags: 1,eax: 15,ebx: 2440,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 31, index: 1,flags: 1,eax: 2,ebx: 4,ecx: 513,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 31, index: 2,flags: 1,eax: 0,ebx: 0,ecx: 2,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 9,flags: 1,eax: 8,ebx: 2688,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 31, index: 0,flags: 1,eax: 1,ebx: 2,ecx: 256,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483648, index: 0,flags: 0,eax: 2147483656,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483649, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 289,edx: 739248128,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483650, index: 0,flags: 0,eax: 1702129225,ebx: 693250156,ecx: 1868912672,edx: 693250158,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 25, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 26, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483651, index: 0,flags: 0,eax: 1634488352,ebx: 1970170228,ecx: 876093549,edx: 541274424,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483652, index: 0,flags: 0,eax: 542462019,ebx: 775036992,ecx: 1212624951,edx: 122,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 22, index: 0,flags: 0,eax: 2700,ebx: 3600,ecx: 100,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 24, index: 0,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 23, index: 0,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483653, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483654, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 134246464,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483655, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 256,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 2147483656, index: 0,flags: 0,eax: 14644,ebx: 16830464,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 1073741824, index: 0,flags: 0,eax: 1073741825,ebx: 1263359563,ecx: 1447775574,edx: 77,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 27, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 28, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 29, index: 0,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 1073741825, index: 0,flags: 0,eax: 16777346,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 11, index: 1,flags: 1,eax: 2,ebx: 4,ecx: 513,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 11, index: 2,flags: 1,eax: 0,ebx: 0,ecx: 2,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 7, index: 0,flags: 1,eax: 1,ebx: 4055836651,ecx: 440491846,edx: 2894087184,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 9, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 10, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 11, index: 0,flags: 1,eax: 1,ebx: 2,ecx: 256,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 12, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 0,flags: 1,eax: 231,ebx: 2688,ecx: 2688,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 14, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 8, index: 0,flags: 0,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 0, index: 0,flags: 0,eax: 31,ebx: 1970169159,ecx: 1818588270,edx: 1231384169,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 15, index: 0,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 7, index: 1,flags: 1,eax: 7216,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 4, index: 1,flags: 1,eax: 67125538,ebx: 29360191,ecx: 63,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 7,flags: 1,eax: 1024,ebx: 1664,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 6,flags: 1,eax: 512,ebx: 1152,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 5,flags: 1,eax: 64,ebx: 1088,ecx: 0,edx: 0,.. Default::default() },
+        kvm_bindings::kvm_cpuid_entry2 { function: 4, index: 4,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
+    ]
 }
 
 #[cfg(feature = "tdx")]
@@ -1157,14 +1255,14 @@ impl hypervisor::Hypervisor for KvmHypervisor {
             nr_cpuid_configs: TDX_MAX_NR_CPUID_CONFIGS as u32,
             ..Default::default()
         };
-
-        tdx_command(
-            &self.kvm.as_raw_fd(),
-            TdxCommand::Capabilities,
-            0,
-            &data as *const _ as u64,
-        )
-        .map_err(|e| hypervisor::HypervisorError::TdxCapabilities(e.into()))?;
+        // in-house hypervisor does not use this command
+        //tdx_command(
+        //    &self.kvm.as_raw_fd(),
+        //    TdxCommand::Capabilities,
+        //    0,
+        //    &data as *const _ as u64,
+        //)
+        //.map_err(|e| hypervisor::HypervisorError::TdxCapabilities(e.into()))?;
 
         Ok(data)
     }
@@ -2188,6 +2286,7 @@ impl cpu::Vcpu for KvmVcpu {
     ///
     #[cfg(feature = "tdx")]
     fn tdx_init(&self, hob_address: u64) -> cpu::Result<()> {
+        info!("tdx_init, hob_address = {:x}", hob_address);
         tdx_command(&self.fd.as_raw_fd(), TdxCommand::InitVcpu, 0, hob_address)
             .map_err(cpu::HypervisorCpuError::InitializeTdx)
     }

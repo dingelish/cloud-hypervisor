@@ -656,6 +656,15 @@ pub fn generate_common_cpuid(
 
     // Update some existing CPUID
     for entry in cpuid.as_mut_slice().iter_mut() {
+        //if entry.function == 0x7 && entry.index == 0 {
+        //    if ((entry.ebx & (1 << 4)) >> 4) != ((entry.ebx & (1 << 11)) >> 11) {
+        //        info!("TDX CPUID[0x7].EBX[BIT 4].hle != CPUID[0x7].EBX[BIT 11].rtm.");
+        //        info!("Clearing both bits to 0.");
+        //        entry.ebx &= !(1 << 4);
+        //        entry.ebx &= !(1 << 11);
+        //    }
+        //    break;
+        //}
         match entry.function {
             // Clear AMX related bits if the AMX feature is not enabled
             0x7 => {
