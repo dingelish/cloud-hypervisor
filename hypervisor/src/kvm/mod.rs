@@ -27,7 +27,6 @@ use crate::{arm64_core_reg_id, offset_of};
 use kvm_ioctls::{NoDatamatch, VcpuFd, VmFd};
 use std::any::Any;
 use std::mem;
-use std::io::Write;
 use std::collections::HashMap;
 #[cfg(target_arch = "aarch64")]
 use std::convert::TryInto;
@@ -65,7 +64,7 @@ use aarch64::{RegList, Register, StandardRegisters};
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{
     kvm_enable_cap, kvm_msr_entry, MsrList, KVM_CAP_HYPERV_SYNIC, KVM_CAP_SPLIT_IRQCHIP,
-    KVM_GUESTDBG_USE_HW_BP,
+    KVM_GUESTDBG_USE_HW_BP,KVM_CAP_MAX_VCPUS,
 };
 #[cfg(target_arch = "x86_64")]
 use x86_64::check_required_kvm_extensions;
@@ -433,9 +432,10 @@ impl vm::Vm for KvmVm {
     /// Sets the address of the one-page region in the VM's address space.
     ///
     fn set_identity_map_address(&self, address: u64) -> vm::Result<()> {
-        self.fd
-            .set_identity_map_address(address)
-            .map_err(|e| vm::HypervisorVmError::SetIdentityMapAddress(e.into()))
+        //self.fd
+        //    .set_identity_map_address(address)
+        //    .map_err(|e| vm::HypervisorVmError::SetIdentityMapAddress(e.into()))
+        Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -880,11 +880,11 @@ impl vm::Vm for KvmVm {
             },
         };
 
-        let mut file = File::create("/tmp/tdx_init_vm_rs.blob").expect("Cannot create /tmp/tdx_init_vm_rs.blob");
-        let p = &data as * const _ as  * const u8;
-        let pslice = unsafe { std::slice::from_raw_parts(p, mem::size_of::<TdxInitVm>()) };
-        file.write_all(pslice).unwrap();
-        file.sync_all().unwrap();
+        //let mut file = File::create("/tmp/tdx_init_vm_rs.blob").expect("Cannot create /tmp/tdx_init_vm_rs.blob");
+        //let p = &data as * const _ as  * const u8;
+        //let pslice = unsafe { std::slice::from_raw_parts(p, mem::size_of::<TdxInitVm>()) };
+        //file.write_all(pslice).unwrap();
+        //file.sync_all().unwrap();
 
         info!("tdx_init, cpuid size = {}", cpuid_vec.len()); // should be 8192 + 2280
 
@@ -895,6 +895,16 @@ impl vm::Vm for KvmVm {
             ..Default::default()
         };
         cap.args[0] = 6;
+        self.fd
+            .enable_cap(&cap).unwrap();
+
+        // set maxvcpu cap. values are dumped values
+        let mut cap = kvm_enable_cap {
+            cap: KVM_CAP_MAX_VCPUS,
+            flags: 0,
+            ..Default::default()
+        };
+        cap.args[0] = 1;
         self.fd
             .enable_cap(&cap).unwrap();
 
