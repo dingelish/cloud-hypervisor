@@ -193,6 +193,9 @@ pub fn parse_tdvf_sections(file: &mut File) -> Result<(Vec<TdvfSection>, bool), 
     })
     .map_err(TdvfError::ReadDescriptor)?;
 
+    info!("Parsed TDVF sections: {:?}", sections);
+    info!("Parsed guid: {:?}", guid_found);
+
     Ok((sections, guid_found))
 }
 

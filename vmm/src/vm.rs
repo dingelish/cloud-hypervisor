@@ -1836,6 +1836,20 @@ impl Vm {
             .as_ref()
             .unwrap()
             .boot_guest_memory();
+        info!("boot_guest_memory: {:?}", boot_guest_memory);
+
+        use hypervisor::kvm::{memfd_restricted, memfd_setsize};
+        let one_gig_memfd = memfd_restricted(0);
+        if one_gig_memfd == -1 {
+            error!("create memfd_restricted error");
+            unsafe { libc::exit(-1);}
+        }
+        let res = memfd_setsize(one_gig_memfd.try_into().unwrap(), 0x4000_0000);
+        if res == -1 {
+            error!("ftruncate error");
+            unsafe { libc::exit(-1);}
+        }
+
         for section in sections {
             // No need to allocate if the section falls within guest RAM ranges
             if boot_guest_memory.address_in_range(GuestAddress(section.address)) {
@@ -1853,6 +1867,7 @@ impl Vm {
                 .add_ram_region(GuestAddress(section.address), section.size as usize)
                 .map_err(Error::AllocatingTdvfMemory)?;
         }
+        unsafe { libc::exit(0)};
 
         // The TDVF file contains a table of section as well as code
         let firmware_path = self
@@ -1897,6 +1912,7 @@ impl Vm {
                         let payload_size = payload_file
                             .seek(SeekFrom::End(0))
                             .map_err(Error::LoadPayload)?;
+                        println!("payload_size = {}", payload_size);
 
                         payload_file
                             .seek(SeekFrom::Start(0x1f1))
@@ -1908,12 +1924,14 @@ impl Vm {
                             .unwrap();
 
                         if payload_header.header != 0x5372_6448 {
+                            println!("Header is not 0x53726448");
                             return Err(Error::InvalidPayloadType);
                         }
 
                         if (payload_header.version < 0x0200)
                             || ((payload_header.loadflags & 0x1) == 0x0)
                         {
+                            println!("Payload header version incorrect or loadflags not right");
                             return Err(Error::InvalidPayloadType);
                         }
 
@@ -2120,8 +2138,10 @@ impl Vm {
 
         #[cfg(feature = "tdx")]
         let (sections, guid_found) = if tdx_enabled {
+            info!("extracing tdvf sections");
             self.extract_tdvf_sections()?
         } else {
+            info!("skipped tdvf extraction");
             (Vec::new(), false)
         };
 
@@ -2129,8 +2149,10 @@ impl Vm {
         #[cfg(feature = "tdx")]
         let hob_address = if tdx_enabled {
             // TDX sections are written to memory.
+            info!("populating tdx sections");
             self.populate_tdx_sections(&sections, guid_found)?
         } else {
+            info!("skipped populating tdx sections");
             None
         };
 
@@ -2162,6 +2184,7 @@ impl Vm {
 
         #[cfg(feature = "tdx")]
         if let Some(hob_address) = hob_address {
+            info!("hob_address found: {}", hob_address);
             // With the HOB address extracted the vCPUs can have
             // their TDX state configured.
             self.cpu_manager
@@ -2172,20 +2195,28 @@ impl Vm {
             // Let the hypervisor know which memory ranges are shared with the
             // guest. This prevents the guest from ignoring/discarding memory
             // regions provided by the host.
+            info!("cpu_manager initialize_tdx complete!");
+            info!("init_tdx_memory for sections!: {:?}", sections);
             self.init_tdx_memory(&sections)?;
+            info!("init_tdx_memory completed!");
             // With TDX memory and CPU state configured TDX setup is complete
+            info!("running tdx_finalize!");
             self.vm.tdx_finalize().map_err(Error::FinalizeTdx)?;
+            info!("tdx_finalize complete!");
         }
 
+        info!("cpu_manager start_boot_vcpus with VmState::BreakPoint");
         self.cpu_manager
             .lock()
             .unwrap()
             .start_boot_vcpus(new_state == VmState::BreakPoint)
             .map_err(Error::CpuManager)?;
+        info!("cpu_manager start_boot_vcpus completed!");
 
         let mut state = self.state.try_write().map_err(|_| Error::PoisonedState)?;
         *state = new_state;
         event!("vm", "booted");
+        info!("vm booted!");
         Ok(())
     }
 

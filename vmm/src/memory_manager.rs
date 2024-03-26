@@ -1062,6 +1062,7 @@ impl MemoryManager {
                 GuestMemoryMmap::from_arc_regions(mem_regions).map_err(Error::GuestMemory)?;
 
             let boot_guest_memory = guest_memory.clone();
+            info!("init boot_guest_memory: {:?}", boot_guest_memory);
 
             let mut start_of_device_area =
                 MemoryManager::start_addr(guest_memory.last_addr(), allow_mem_hotplug)?;
@@ -1148,6 +1149,7 @@ impl MemoryManager {
         };
 
         let guest_memory = GuestMemoryAtomic::new(guest_memory);
+        info!("before setting MMIO and PIO");
 
         // Both MMIO and PIO address spaces start at address 0.
         let allocator = Arc::new(Mutex::new(
@@ -1617,6 +1619,7 @@ impl MemoryManager {
         start_addr: GuestAddress,
         size: usize,
     ) -> Result<Arc<GuestRegionMmap>, Error> {
+        info!("add_ram_region. start_addr: {:?}, size: {}", start_addr, size);
         // Allocate memory for the region
         let region = MemoryManager::create_ram_region(
             &None,

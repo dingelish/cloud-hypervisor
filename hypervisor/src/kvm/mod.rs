@@ -265,6 +265,8 @@ impl From<kvm_userspace_memory_region> for UserMemoryRegion {
             memory_size: region.memory_size,
             userspace_addr: region.userspace_addr,
             flags,
+            restricted_memfd: 0,
+            restricted_offset: 0,
         }
     }
 }
@@ -734,6 +736,7 @@ impl vm::Vm for KvmVm {
             ..Default::default()
         };
         cap.args[0] = NUM_IOAPIC_PINS as u64;
+        // kvm.cc:998] Enabling Split Irqchip V2 (121).
         self.fd
             .enable_cap(&cap)
             .map_err(|e| vm::HypervisorVmError::EnableSplitIrq(e.into()))?;
@@ -880,12 +883,6 @@ impl vm::Vm for KvmVm {
             },
         };
 
-        //let mut file = File::create("/tmp/tdx_init_vm_rs.blob").expect("Cannot create /tmp/tdx_init_vm_rs.blob");
-        //let p = &data as * const _ as  * const u8;
-        //let pslice = unsafe { std::slice::from_raw_parts(p, mem::size_of::<TdxInitVm>()) };
-        //file.write_all(pslice).unwrap();
-        //file.sync_all().unwrap();
-
         info!("tdx_init, cpuid size = {}", cpuid_vec.len()); // should be 8192 + 2280
 
         // set cap. values are dumped values
@@ -911,14 +908,11 @@ impl vm::Vm for KvmVm {
         // set tsc khz
         unsafe { ioctl_with_val(&self.fd.as_raw_fd(), KVM_SET_TSC_KHZ(), 2700000u64) };
 
-        // send the dumped blob
-        let dumped_init_blob: Vec<u8> = std::fs::read("/tmp/init_vm.blob").unwrap();
         tdx_command(
             &self.fd.as_raw_fd(),
             TdxCommand::InitVm,
             0,
-            //&data as *const _ as u64,
-            dumped_init_blob.as_ptr() as *const _ as u64,
+            &data as *const _ as u64,
         )
         .map_err(vm::HypervisorVmError::InitializeTdx)
     }
@@ -952,9 +946,19 @@ impl vm::Vm for KvmVm {
         let data = TdxInitMemRegion {
             host_address,
             guest_address,
-            pages: size / 4096,
+            pages: (size + 4096 - 1) / 4096,
         };
 
+        info!("calling InitMemRegion, host_address: {:x}, guest_address: {:x}, pages: {}",
+            host_address, guest_address, data.pages);
+        info!("first 16 bytes of host_address are:");
+        let s = unsafe { std::slice::from_raw_parts(host_address as * const u8, 16) };
+        let mut bindump: String = "".to_string();
+        for i in 0..16 {
+              bindump = bindump + &format!("{:#04x} ", s[i]);
+        }
+        info!("{}", bindump);
+        info!("executing tdx_command!");
         tdx_command(
             &self.fd.as_raw_fd(),
             TdxCommand::InitMemRegion,
@@ -1031,6 +1035,68 @@ fn gen_hardcoded_cpuid_entries() -> Vec<kvm_bindings::kvm_cpuid_entry2> {
         kvm_bindings::kvm_cpuid_entry2 { function: 13, index: 5,flags: 1,eax: 64,ebx: 1088,ecx: 0,edx: 0,.. Default::default() },
         kvm_bindings::kvm_cpuid_entry2 { function: 4, index: 4,flags: 1,eax: 0,ebx: 0,ecx: 0,edx: 0,.. Default::default() },
     ]
+}
+
+#[cfg(feature = "tdx")]
+pub fn memfd_restricted(flags: i32) -> i64 {
+    info!("entering memfd_restricted");
+    const __NR_memfd_restricted:i64 = 451;
+    let ret = unsafe {
+        libc::syscall(__NR_memfd_restricted, flags) // needs --seccomp false
+    };
+
+    info!("leaving memfd_restricted, ret: {}", ret);
+    return ret;
+}
+
+#[cfg(feature = "tdx")]
+pub fn memfd_setsize(fd: i32, chunk_size: i64) -> i32 {
+    let ret = unsafe {
+        libc::ftruncate(fd, chunk_size)
+    };
+
+    return ret;
+}
+
+#[cfg(feature = "tdx")]
+pub fn set_user_memory_region2(vm_fd: &RawFd, slot: u32, flags: u32, gpa: u64, memory_size: u64, hva: u64, restricted_fd: u32, restricted_offset: u64) -> i32 {
+    info!("set user memory region 2: vm_fd: {:?}, slot: {}, flags: {}, gpa: {}, memory_size: {}, hva: {}, restricted_fd: {}, restricted_fd_offset: {}",
+        vm_fd, slot, flags, gpa, memory_size, hva, restricted_fd, restricted_offset);
+
+    #[derive(Debug, Default)]
+    struct Cmdstruct {
+        slot: u32,
+        flags: u32,
+        gpa: u64,
+        memory_size: u64,
+        hva: u64,
+        restricted_offset: u64,
+        restricted_fd: u32,
+        pad1: u32,
+        pad2: [u64;14],
+    }
+
+    let cmd = Cmdstruct {
+        slot: slot,
+        flags: flags,
+        gpa: gpa,
+        memory_size: memory_size,
+        hva: hva,
+        restricted_offset: restricted_offset,
+        restricted_fd: restricted_fd,
+        ..Default::default()
+    };
+
+    ioctl_iow_nr!(KVM_CAP_GOOGLE_USER_MEMORY2, KVMIO, 0xf6, u64);
+    let ret = unsafe {
+        ioctl_with_val(
+            vm_fd,
+            KVM_CAP_GOOGLE_USER_MEMORY2(),
+            &cmd as * const Cmdstruct as u64,
+        )
+    };
+
+    return ret;
 }
 
 #[cfg(feature = "tdx")]

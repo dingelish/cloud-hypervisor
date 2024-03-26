@@ -125,6 +125,8 @@ pub struct UserMemoryRegion {
     pub memory_size: u64,
     pub userspace_addr: u64,
     pub flags: u32,
+    pub restricted_memfd: i32,
+    pub restricted_offset: u64,
 }
 
 ///

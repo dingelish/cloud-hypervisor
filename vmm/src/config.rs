@@ -2638,6 +2638,7 @@ impl VmConfig {
             preserved_fds: None,
         };
         config.validate().map_err(Error::Validation)?;
+        info!("Parsed memory config: {:?}", config.memory);
         Ok(config)
     }
 
