@@ -400,6 +400,9 @@ pub struct KvmVm {
 }
 
 impl KvmVm {
+    pub fn get_raw_fd(&self) -> RawFd {
+        self.fd.clone().as_raw_fd()
+    }
     ///
     /// Creates an emulated device in the kernel.
     ///
