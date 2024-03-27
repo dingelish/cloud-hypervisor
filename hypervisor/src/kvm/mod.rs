@@ -134,7 +134,35 @@ ioctl_iowr_nr!(KVM_MEMORY_ENCRYPT_OP, KVMIO, 0xba, std::os::raw::c_ulong);
 #[cfg(feature = "tdx")]
 ioctl_io_nr!(KVM_SET_TSC_KHZ, KVMIO, 0xa2);
 #[cfg(feature = "tdx")]
-ioctl_iow_nr!(KVM_ENABLE_CAP, KVMIO, 0xa3, kvm_enable_cap);
+ioctl_iowr_nr!(KVM_PRIVATE_SET_MEMORY_ATTRIBUTES, KVMIO, 0xf8, KvmPrivateMemoryAttributes);
+
+#[derive(Debug, Default)]
+#[repr(C)]
+struct KvmPrivateMemoryAttributes{
+  gpa: u64,
+  size: u64,
+  attributes: u64,
+  flags: u64,
+}
+
+pub fn kvm_set_private_memory_attributes (vm_fd: &RawFd, gpa: u64, size: u64, attributes: u64, flags: u64) -> i32 {
+    let cmd = KvmPrivateMemoryAttributes {
+        gpa,
+        size,
+        attributes,
+        flags,
+    };
+
+    let ret = unsafe {
+        ioctl_with_val(
+            vm_fd,
+            KVM_PRIVATE_SET_MEMORY_ATTRIBUTES(),
+            &cmd as * const _ as u64,
+        )
+    };
+
+    ret
+}
 
 #[cfg(feature = "tdx")]
 #[repr(u32)]
@@ -1090,11 +1118,11 @@ pub fn set_user_memory_region2(vm_fd: &RawFd, slot: u32, flags: u32, gpa: u64, m
         ..Default::default()
     };
 
-    ioctl_iow_nr!(KVM_CAP_GOOGLE_USER_MEMORY2, KVMIO, 0xf6, u64);
+    ioctl_iow_nr!(KVM_CAP_TDX_USER_MEMORY2, KVMIO, 0xf6, u64);
     let ret = unsafe {
         ioctl_with_val(
             vm_fd,
-            KVM_CAP_GOOGLE_USER_MEMORY2(),
+            KVM_CAP_TDX_USER_MEMORY2(),
             &cmd as * const Cmdstruct as u64,
         )
     };
