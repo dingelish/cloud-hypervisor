@@ -2022,6 +2022,10 @@ impl Vm {
         let guest_memory = self.memory_manager.lock().as_ref().unwrap().guest_memory();
         let mem = guest_memory.memory();
 
+        // set all memory as private before init each memory region
+        let mut hvm = Arc::get_mut(&mut self.vm).unwrap();
+        hvm.set_all_memory_as_private();
+
         for section in sections {
             self.vm
                 .tdx_init_memory_region(

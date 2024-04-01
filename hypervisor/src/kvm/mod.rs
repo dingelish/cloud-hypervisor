@@ -557,6 +557,29 @@ impl vm::Vm for KvmVm {
         self.restricted_memory.push(rm);
         info!("init_restricted_memory completed!");
     }
+
+    #[cfg(feature = "tdx")]
+    fn set_all_memory_as_private(&mut self) {
+        info!("entering set_all_memory_as_private");
+        const KVM_PRIVATE_MEMORY_ATTRIBUTE_PRIVATE: u64 = 1 << 3;
+
+        for i in 0..self.restricted_memory.len() {
+            // pub fn kvm_set_private_memory_attributes
+            // (vm_fd: &RawFd, gpa: u64, size: u64, attributes: u64, flags: u64) -> i32
+            // RestrictedMemory: memfd, gpa, size
+            let r = kvm_set_private_memory_attributes(
+                &self.fd.as_raw_fd(),
+                self.restricted_memory[i].gpa,
+                self.restricted_memory[i].size,
+                KVM_PRIVATE_MEMORY_ATTRIBUTE_PRIVATE,
+                0
+            );
+            info!("kvm_set_private_memory_attributes returns {}", r);
+        }
+
+        info!("completed set_all_memory_as_private!");
+    }
+
     #[cfg(target_arch = "x86_64")]
     ///
     /// Sets the address of the one-page region in the VM's address space.
