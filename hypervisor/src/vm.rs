@@ -348,6 +348,11 @@ pub trait Vm: Send + Sync + Any {
         unimplemented!()
     }
     #[cfg(feature = "tdx")]
+    /// restricted memory
+    fn init_restricted_memory(&mut self) {
+        unimplemented!()
+    }
+    #[cfg(feature = "tdx")]
     /// Initialize TDX on this VM
     fn tdx_init(&self, _cpuid: &[CpuIdEntry], _max_vcpus: u32) -> Result<()> {
         unimplemented!()

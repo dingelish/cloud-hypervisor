@@ -26,6 +26,7 @@ use crate::HypervisorType;
 use crate::{arm64_core_reg_id, offset_of};
 use kvm_ioctls::{NoDatamatch, VcpuFd, VmFd};
 use std::any::Any;
+#[cfg(feature = "tdx")]
 use std::mem;
 use std::collections::HashMap;
 #[cfg(target_arch = "aarch64")]
@@ -136,6 +137,47 @@ ioctl_io_nr!(KVM_SET_TSC_KHZ, KVMIO, 0xa2);
 #[cfg(feature = "tdx")]
 ioctl_iowr_nr!(KVM_PRIVATE_SET_MEMORY_ATTRIBUTES, KVMIO, 0xf8, KvmPrivateMemoryAttributes);
 
+#[cfg(feature = "tdx")]
+pub fn set_user_memory_region2(vm_fd: &RawFd, slot: u32, flags: u32, gpa: u64, memory_size: u64, hva: u64, restricted_fd: u32, restricted_offset: u64) -> i32 {
+    info!("set user memory region 2: vm_fd: {:?}, slot: {}, flags: {}, gpa: {}, memory_size: {}, hva: {}, restricted_fd: {}, restricted_fd_offset: {}",
+        vm_fd, slot, flags, gpa, memory_size, hva, restricted_fd, restricted_offset);
+
+    #[derive(Debug, Default)]
+    struct Cmdstruct {
+        slot: u32,
+        flags: u32,
+        gpa: u64,
+        memory_size: u64,
+        hva: u64,
+        restricted_offset: u64,
+        restricted_fd: u32,
+        pad1: u32,
+        pad2: [u64;14],
+    }
+
+    let cmd = Cmdstruct {
+        slot: slot,
+        flags: flags,
+        gpa: gpa,
+        memory_size: memory_size,
+        hva: hva,
+        restricted_offset: restricted_offset,
+        restricted_fd: restricted_fd,
+        ..Default::default()
+    };
+
+    ioctl_iow_nr!(KVM_PRIVATE_SET_USER_MEMORY_REGION2, KVMIO, 0xf6, u64);
+    let ret = unsafe {
+        ioctl_with_val(
+            vm_fd,
+            KVM_PRIVATE_SET_USER_MEMORY_REGION2(),
+            &cmd as * const Cmdstruct as u64,
+        )
+    };
+
+    return ret;
+}
+
 #[derive(Debug, Default)]
 #[repr(C)]
 struct KvmPrivateMemoryAttributes{
@@ -145,6 +187,7 @@ struct KvmPrivateMemoryAttributes{
   flags: u64,
 }
 
+#[cfg(feature = "tdx")]
 pub fn kvm_set_private_memory_attributes (vm_fd: &RawFd, gpa: u64, size: u64, attributes: u64, flags: u64) -> i32 {
     let cmd = KvmPrivateMemoryAttributes {
         gpa,
@@ -419,15 +462,26 @@ struct KvmDirtyLogSlot {
     userspace_addr: u64,
 }
 
+#[cfg(feature = "tdx")]
+#[derive(Debug, Default)]
+struct RestrictedMemory {
+    memfd: i32,
+    gpa: u64,
+    size: u64,
+}
+
 /// Wrapper over KVM VM ioctls.
 pub struct KvmVm {
     fd: Arc<VmFd>,
     #[cfg(target_arch = "x86_64")]
     msrs: Vec<MsrEntry>,
     dirty_log_slots: Arc<RwLock<HashMap<u32, KvmDirtyLogSlot>>>,
+    #[cfg(feature = "tdx")]
+    restricted_memory: Vec<RestrictedMemory>,
 }
 
 impl KvmVm {
+    #[cfg(feature = "tdx")]
     pub fn get_raw_fd(&self) -> RawFd {
         self.fd.clone().as_raw_fd()
     }
@@ -460,15 +514,58 @@ impl KvmVm {
 /// let vm = hypervisor.create_vm().expect("new VM fd creation failed");
 /// ```
 impl vm::Vm for KvmVm {
+    #[cfg(feature = "tdx")]
+    fn init_restricted_memory(&mut self) {
+        let one_gig_memfd = memfd_restricted(0);
+        if one_gig_memfd == -1 {
+            error!("create memfd_restricted error");
+            unsafe { libc::exit(-1);}
+        }
+        info!("one_gig_memfd created, fd: {:?}", one_gig_memfd);
+        let res = memfd_setsize(one_gig_memfd.try_into().unwrap(), 0x4000_0000);
+        if res == -1 {
+            error!("ftruncate error");
+            unsafe { libc::exit(-1);}
+        }
+        let rm = RestrictedMemory {
+            memfd: one_gig_memfd,
+            gpa: 0,
+            size: 0x40000000,
+        };
+        info!("set size for one_git_memfd success!");
+        info!("pushing to the list of restricted_memory. {:?}", rm);
+        self.restricted_memory.push(rm);
+
+        let top_256mb_memfd = memfd_restricted(0);
+        if top_256mb_memfd == -1 {
+            error!("create memfd_restricted for top_256mb_memfd error");
+            unsafe { libc::exit(-1);}
+        }
+        info!("top_256mb_memfd created, fd: {:?}", top_256mb_memfd);
+        let res = memfd_setsize(top_256mb_memfd.try_into().unwrap(), 0x100_0000);
+        if res == -1 {
+            error!("ftruncate error on top_256mb_memfd");
+            unsafe { libc::exit(-1);}
+        }
+        info!("set size for top_256mb success!");
+        let rm = RestrictedMemory {
+            memfd: top_256mb_memfd,
+            gpa: 0xff00_0000,
+            size: 0x100_0000,
+        };
+        info!("pushing to the list of restricted_memory. {:?}", rm);
+        self.restricted_memory.push(rm);
+        info!("init_restricted_memory completed!");
+    }
     #[cfg(target_arch = "x86_64")]
     ///
     /// Sets the address of the one-page region in the VM's address space.
     ///
     fn set_identity_map_address(&self, address: u64) -> vm::Result<()> {
-        //self.fd
-        //    .set_identity_map_address(address)
-        //    .map_err(|e| vm::HypervisorVmError::SetIdentityMapAddress(e.into()))
-        Ok(())
+        self.fd
+            .set_identity_map_address(address)
+            .map_err(|e| vm::HypervisorVmError::SetIdentityMapAddress(e.into()))
+        //Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -720,6 +817,41 @@ impl vm::Vm for KvmVm {
             region.flags = 0;
         }
 
+        #[cfg(feature = "tdx")]
+        {
+            const INVALID_FD: i32 = -1;
+            const INVALID_ADDR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+            let mut rfd = INVALID_FD;
+            let mut roffset = INVALID_ADDR;
+
+            for i in 0..self.restricted_memory.len() {
+                info!("checking restricted_memory slot {}", i);
+                let rgpa = self.restricted_memory[i].gpa;
+                let rsize = self.restricted_memory[i].size;
+                if region.guest_phys_addr >= rgpa && region.guest_phys_addr < rgpa + rsize {
+                    info!("found registered region at slot {}", i);
+                    rfd = self.restricted_memory[i].memfd;
+                    roffset = region.guest_phys_addr - rgpa;
+                }
+            }
+
+            if rfd == INVALID_FD || roffset == INVALID_ADDR {
+                panic!("cannot find registred restricted memory!");
+            }
+
+            let r = set_user_memory_region2(
+                    &self.fd.as_raw_fd(),
+                    region.slot,
+                    region.flags,
+                    region.guest_phys_addr,
+                    region.memory_size,
+                    region.userspace_addr,
+                    rfd.try_into().unwrap(),
+                    roffset,
+            );
+            info!("set_user_memory_region2 returns: {}", r);
+        }
+
         // SAFETY: Safe because guest regions are guaranteed not to overlap.
         unsafe {
             self.fd
@@ -902,7 +1034,7 @@ impl vm::Vm for KvmVm {
         }
         info!("size of TdxInitVm is: {}", mem::size_of::<TdxInitVm>());
         let data = TdxInitVm {
-            attributes: 268435456, //1 << TDX_ATTR_SEPT_VE_DISABLE,
+            attributes: 1 << TDX_ATTR_SEPT_VE_DISABLE, //268435456
             mrconfigid: [0; 6],
             mrowner: [0; 6],
             mrownerconfig: [0; 6],
@@ -1069,7 +1201,7 @@ fn gen_hardcoded_cpuid_entries() -> Vec<kvm_bindings::kvm_cpuid_entry2> {
 }
 
 #[cfg(feature = "tdx")]
-pub fn memfd_restricted(flags: i32) -> i64 {
+pub fn memfd_restricted(flags: i32) -> i32 {
     info!("entering memfd_restricted");
     const __NR_memfd_restricted:i64 = 451;
     let ret = unsafe {
@@ -1077,7 +1209,7 @@ pub fn memfd_restricted(flags: i32) -> i64 {
     };
 
     info!("leaving memfd_restricted, ret: {}", ret);
-    return ret;
+    return ret.try_into().unwrap();
 }
 
 #[cfg(feature = "tdx")]
@@ -1089,46 +1221,6 @@ pub fn memfd_setsize(fd: i32, chunk_size: i64) -> i32 {
     return ret;
 }
 
-#[cfg(feature = "tdx")]
-pub fn set_user_memory_region2(vm_fd: &RawFd, slot: u32, flags: u32, gpa: u64, memory_size: u64, hva: u64, restricted_fd: u32, restricted_offset: u64) -> i32 {
-    info!("set user memory region 2: vm_fd: {:?}, slot: {}, flags: {}, gpa: {}, memory_size: {}, hva: {}, restricted_fd: {}, restricted_fd_offset: {}",
-        vm_fd, slot, flags, gpa, memory_size, hva, restricted_fd, restricted_offset);
-
-    #[derive(Debug, Default)]
-    struct Cmdstruct {
-        slot: u32,
-        flags: u32,
-        gpa: u64,
-        memory_size: u64,
-        hva: u64,
-        restricted_offset: u64,
-        restricted_fd: u32,
-        pad1: u32,
-        pad2: [u64;14],
-    }
-
-    let cmd = Cmdstruct {
-        slot: slot,
-        flags: flags,
-        gpa: gpa,
-        memory_size: memory_size,
-        hva: hva,
-        restricted_offset: restricted_offset,
-        restricted_fd: restricted_fd,
-        ..Default::default()
-    };
-
-    ioctl_iow_nr!(KVM_CAP_TDX_USER_MEMORY2, KVMIO, 0xf6, u64);
-    let ret = unsafe {
-        ioctl_with_val(
-            vm_fd,
-            KVM_CAP_TDX_USER_MEMORY2(),
-            &cmd as * const Cmdstruct as u64,
-        )
-    };
-
-    return ret;
-}
 
 #[cfg(feature = "tdx")]
 fn tdx_command(
@@ -1288,6 +1380,8 @@ impl hypervisor::Hypervisor for KvmHypervisor {
                 fd: vm_fd,
                 msrs,
                 dirty_log_slots: Arc::new(RwLock::new(HashMap::new())),
+                #[cfg(feature = "tdx")]
+                restricted_memory: vec![],
             }))
         }
 

@@ -444,13 +444,6 @@ pub fn physical_bits(hypervisor: &Arc<dyn hypervisor::Hypervisor>, max_phys_bits
     cmp::min(host_phys_bits, max_phys_bits)
 }
 
-#[derive(Debug, Default)]
-struct RestrictedMemory {
-    memfd: i64,
-    gpa: u64,
-    size: u64,
-}
-
 pub struct Vm {
     #[cfg(feature = "tdx")]
     kernel: Option<File>,
@@ -471,54 +464,9 @@ pub struct Vm {
     hypervisor: Arc<dyn hypervisor::Hypervisor>,
     stop_on_boot: bool,
     load_payload_handle: Option<thread::JoinHandle<Result<EntryPoint>>>,
-    #[cfg(feature = "tdx")]
-    restricted_memory: Vec<RestrictedMemory>,
 }
 
 impl Vm {
-    pub fn init_restricted_memory(&mut self) {
-        use hypervisor::kvm::{memfd_restricted, memfd_setsize};
-        let one_gig_memfd = memfd_restricted(0);
-        if one_gig_memfd == -1 {
-            error!("create memfd_restricted error");
-            unsafe { libc::exit(-1);}
-        }
-        info!("one_gig_memfd created, fd: {:?}", one_gig_memfd);
-        let res = memfd_setsize(one_gig_memfd.try_into().unwrap(), 0x4000_0000);
-        if res == -1 {
-            error!("ftruncate error");
-            unsafe { libc::exit(-1);}
-        }
-        let rm = RestrictedMemory {
-            memfd: one_gig_memfd,
-            gpa: 0,
-            size: 0x40000000,
-        };
-        info!("set size for one_git_memfd success!");
-        info!("pushing to the list of restricted_memory. {:?}", rm);
-        self.restricted_memory.push(rm);
-
-        let top_256mb_memfd = memfd_restricted(0);
-        if top_256mb_memfd == -1 {
-            error!("create memfd_restricted for top_256mb_memfd error");
-            unsafe { libc::exit(-1);}
-        }
-        info!("top_256mb_memfd created, fd: {:?}", top_256mb_memfd);
-        let res = memfd_setsize(top_256mb_memfd.try_into().unwrap(), 0x100_0000);
-        if res == -1 {
-            error!("ftruncate error on top_256mb_memfd");
-            unsafe { libc::exit(-1);}
-        }
-        info!("set size for top_256mb success!");
-        let rm = RestrictedMemory {
-            memfd: top_256mb_memfd,
-            gpa: 0xff00_0000,
-            size: 0x100_0000,
-        };
-        info!("pushing to the list of restricted_memory. {:?}", rm);
-        self.restricted_memory.push(rm);
-        info!("init_restricted_memory completed!");
-    }
     pub const HANDLED_SIGNALS: [i32; 1] = [SIGWINCH];
 
     #[allow(clippy::too_many_arguments)]
@@ -754,8 +702,6 @@ impl Vm {
             hypervisor,
             stop_on_boot,
             load_payload_handle,
-            #[cfg(feature = "tdx")]
-            restricted_memory: vec![],
         })
     }
 
@@ -2177,12 +2123,11 @@ impl Vm {
                 .map_err(Error::CpuManager)?;
         }
 
-        //#[cfg(feature = "tdx")]
-        //{
-        //    self.vm.init_restricted_memory();
-        //}
-        self.init_restricted_memory();
-        unsafe { libc::exit(0); }
+        #[cfg(feature = "tdx")]
+        {
+            let mut hvm = Arc::get_mut(&mut self.vm).unwrap();
+            hvm.init_restricted_memory();
+        }
 
         #[cfg(feature = "tdx")]
         let (sections, guid_found) = if tdx_enabled {
@@ -2252,6 +2197,8 @@ impl Vm {
             self.vm.tdx_finalize().map_err(Error::FinalizeTdx)?;
             info!("tdx_finalize complete!");
         }
+
+        unsafe { libc::exit(0); } // For debugging purpose only
 
         info!("cpu_manager start_boot_vcpus with VmState::BreakPoint");
         self.cpu_manager
