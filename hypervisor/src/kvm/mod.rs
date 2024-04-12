@@ -45,6 +45,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_arch = "aarch64")]
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
+#[cfg(feature = "tdx")]
+use std::sync::Mutex;
 use vmm_sys_util::eventfd::EventFd;
 // x86_64 dependencies
 #[cfg(target_arch = "x86_64")]
@@ -97,7 +99,7 @@ use std::mem;
 use thiserror::Error;
 use vfio_ioctls::VfioDeviceFd;
 #[cfg(feature = "tdx")]
-use vmm_sys_util::{ioctl::ioctl_with_val, ioctl_ioc_nr, ioctl_iowr_nr, ioctl_iow_nr};
+use vmm_sys_util::{ioctl::{ioctl_with_val, ioctl_with_ref}, ioctl_ioc_nr, ioctl_iowr_nr, ioctl_iow_nr};
 ///
 /// Export generically-named wrappers of kvm-bindings for Unix-based platforms
 ///
@@ -108,6 +110,8 @@ pub use {
 
 #[cfg(target_arch = "x86_64")]
 const KVM_CAP_SGX_ATTRIBUTE: u32 = 196;
+#[cfg(feature = "tdx")]
+const KVM_PRIVATE_MEMORY_ATTRIBUTE_PRIVATE: u64 = 1 << 30;
 
 #[cfg(target_arch = "x86_64")]
 use vmm_sys_util::ioctl_io_nr;
@@ -136,26 +140,15 @@ ioctl_iowr_nr!(KVM_MEMORY_ENCRYPT_OP, KVMIO, 0xba, std::os::raw::c_ulong);
 ioctl_io_nr!(KVM_SET_TSC_KHZ, KVMIO, 0xa2);
 #[cfg(feature = "tdx")]
 ioctl_iowr_nr!(KVM_PRIVATE_SET_MEMORY_ATTRIBUTES, KVMIO, 0xf8, KvmPrivateMemoryAttributes);
+#[cfg(feature = "tdx")]
+ioctl_iow_nr!(KVM_PRIVATE_SET_USER_MEMORY_REGION2, KVMIO, 0xf6, KvmPrivateUserspaceMemoryRegion2);
 
 #[cfg(feature = "tdx")]
 pub fn set_user_memory_region2(vm_fd: &RawFd, slot: u32, flags: u32, gpa: u64, memory_size: u64, hva: u64, restricted_fd: u32, restricted_offset: u64) -> i32 {
-    info!("set user memory region 2: vm_fd: {:?}, slot: {}, flags: {}, gpa: {}, memory_size: {}, hva: {}, restricted_fd: {}, restricted_fd_offset: {}",
+    info!("set user memory region 2: vm_fd: {:?}, slot: {}, flags: {:x}, gpa: {:x}, memory_size: {:x}, hva: {:x}, restricted_fd: {}, restricted_fd_offset: {:x}",
         vm_fd, slot, flags, gpa, memory_size, hva, restricted_fd, restricted_offset);
 
-    #[derive(Debug, Default)]
-    struct Cmdstruct {
-        slot: u32,
-        flags: u32,
-        gpa: u64,
-        memory_size: u64,
-        hva: u64,
-        restricted_offset: u64,
-        restricted_fd: u32,
-        pad1: u32,
-        pad2: [u64;14],
-    }
-
-    let cmd = Cmdstruct {
+    let cmd = KvmPrivateUserspaceMemoryRegion2 {
         slot: slot,
         flags: flags,
         gpa: gpa,
@@ -165,17 +158,41 @@ pub fn set_user_memory_region2(vm_fd: &RawFd, slot: u32, flags: u32, gpa: u64, m
         restricted_fd: restricted_fd,
         ..Default::default()
     };
+    //let test_vec: Vec<u8> = vec![0;0x1000_0000];
+    //let cmd = KvmPrivateUserspaceMemoryRegion2 {
+    //    slot: 0,
+    //    flags: 0x40000000,
+    //    gpa: 0xf000_0000,
+    //    memory_size: 0x1000_0000,
+    //    hva: test_vec.as_ptr() as * const _ as u64,
+    //    restricted_offset: 0,
+    //    restricted_fd: restricted_fd,
+    //    ..Default::default()
+    //};
 
-    ioctl_iow_nr!(KVM_PRIVATE_SET_USER_MEMORY_REGION2, KVMIO, 0xf6, u64);
     let ret = unsafe {
-        ioctl_with_val(
+        ioctl_with_ref(
             vm_fd,
             KVM_PRIVATE_SET_USER_MEMORY_REGION2(),
-            &cmd as * const Cmdstruct as u64,
+            &cmd,
         )
     };
 
     return ret;
+}
+
+#[derive(Debug, Default)]
+#[repr(C)]
+struct KvmPrivateUserspaceMemoryRegion2 {
+    slot: u32,
+    flags: u32,
+    gpa: u64,
+    memory_size: u64,
+    hva: u64,
+    restricted_offset: u64,
+    restricted_fd: u32,
+    pad1: u32,
+    pad2: [u64;14],
 }
 
 #[derive(Debug, Default)]
@@ -197,10 +214,10 @@ pub fn kvm_set_private_memory_attributes (vm_fd: &RawFd, gpa: u64, size: u64, at
     };
 
     let ret = unsafe {
-        ioctl_with_val(
+        ioctl_with_ref(
             vm_fd,
             KVM_PRIVATE_SET_MEMORY_ATTRIBUTES(),
-            &cmd as * const _ as u64,
+            &cmd,
         )
     };
 
@@ -463,7 +480,7 @@ struct KvmDirtyLogSlot {
 }
 
 #[cfg(feature = "tdx")]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct RestrictedMemory {
     memfd: i32,
     gpa: u64,
@@ -477,7 +494,7 @@ pub struct KvmVm {
     msrs: Vec<MsrEntry>,
     dirty_log_slots: Arc<RwLock<HashMap<u32, KvmDirtyLogSlot>>>,
     #[cfg(feature = "tdx")]
-    restricted_memory: Vec<RestrictedMemory>,
+    restricted_memory: Arc<Mutex<Vec<RestrictedMemory>>>,
 }
 
 impl KvmVm {
@@ -515,7 +532,7 @@ impl KvmVm {
 /// ```
 impl vm::Vm for KvmVm {
     #[cfg(feature = "tdx")]
-    fn init_restricted_memory(&mut self) {
+    fn init_restricted_memory(&self) {
         let one_gig_memfd = memfd_restricted(0);
         if one_gig_memfd == -1 {
             error!("create memfd_restricted error");
@@ -534,7 +551,7 @@ impl vm::Vm for KvmVm {
         };
         info!("set size for one_git_memfd success!");
         info!("pushing to the list of restricted_memory. {:?}", rm);
-        self.restricted_memory.push(rm);
+        self.restricted_memory.lock().unwrap().push(rm);
 
         let top_256mb_memfd = memfd_restricted(0);
         if top_256mb_memfd == -1 {
@@ -542,7 +559,11 @@ impl vm::Vm for KvmVm {
             unsafe { libc::exit(-1);}
         }
         info!("top_256mb_memfd created, fd: {:?}", top_256mb_memfd);
-        let res = memfd_setsize(top_256mb_memfd.try_into().unwrap(), 0x100_0000);
+        let top_256mb_mem_size:u64 = 0x1000_0000;
+        let top_256mb_mem_start_addr:u64 = 0xf000_0000;
+        //let top_256mb_mem_size:u64 = 0x0100_0000;
+        //let top_256mb_mem_start_addr:u64 = 0xff00_0000;
+        let res = memfd_setsize(top_256mb_memfd.try_into().unwrap(), top_256mb_mem_size.try_into().unwrap());
         if res == -1 {
             error!("ftruncate error on top_256mb_memfd");
             unsafe { libc::exit(-1);}
@@ -550,27 +571,47 @@ impl vm::Vm for KvmVm {
         info!("set size for top_256mb success!");
         let rm = RestrictedMemory {
             memfd: top_256mb_memfd,
-            gpa: 0xff00_0000,
-            size: 0x100_0000,
+            gpa: top_256mb_mem_start_addr,
+            size: top_256mb_mem_size,
         };
         info!("pushing to the list of restricted_memory. {:?}", rm);
-        self.restricted_memory.push(rm);
+        self.restricted_memory.lock().unwrap().push(rm.clone());
         info!("init_restricted_memory completed!");
+
+        info!("testing create memory region2");
+
+        let test_vec: Vec<u8> = vec![0;top_256mb_mem_size as usize * 2];
+        let aaddr = test_vec.as_ptr() as * const _ as u64;
+        let alignment_block = 32 * 1024;
+        let aaddr = ((aaddr + alignment_block - 1) / alignment_block) * alignment_block+ alignment_block;
+        let r = set_user_memory_region2(
+            &self.fd.as_raw_fd(),
+            0, //slot
+            0x40000000, // flags
+            top_256mb_mem_start_addr + alignment_block, // gpa
+            top_256mb_mem_size - alignment_block, // memory_size
+            aaddr,
+            rm.memfd.try_into().unwrap(),
+            0,
+        );
+        info!("set_user_memory_region2 returns {}", r);
+        unsafe { libc::exit(-1); }
     }
 
     #[cfg(feature = "tdx")]
-    fn set_all_memory_as_private(&mut self) {
+    fn set_all_memory_as_private(&self) {
         info!("entering set_all_memory_as_private");
-        const KVM_PRIVATE_MEMORY_ATTRIBUTE_PRIVATE: u64 = 1 << 3;
 
-        for i in 0..self.restricted_memory.len() {
+        let mut vrm = self.restricted_memory.lock().unwrap();
+
+        for i in 0..vrm.len() {
             // pub fn kvm_set_private_memory_attributes
             // (vm_fd: &RawFd, gpa: u64, size: u64, attributes: u64, flags: u64) -> i32
             // RestrictedMemory: memfd, gpa, size
             let r = kvm_set_private_memory_attributes(
                 &self.fd.as_raw_fd(),
-                self.restricted_memory[i].gpa,
-                self.restricted_memory[i].size,
+                vrm[i].gpa,
+                vrm[i].size,
                 KVM_PRIVATE_MEMORY_ATTRIBUTE_PRIVATE,
                 0
             );
@@ -817,28 +858,28 @@ impl vm::Vm for KvmVm {
     fn create_user_memory_region(&self, user_memory_region: UserMemoryRegion) -> vm::Result<()> {
         let mut region: kvm_userspace_memory_region = user_memory_region.into();
 
-        if (region.flags & KVM_MEM_LOG_DIRTY_PAGES) != 0 {
-            if (region.flags & KVM_MEM_READONLY) != 0 {
-                return Err(vm::HypervisorVmError::CreateUserMemory(anyhow!(
-                    "Error creating regions with both 'dirty-pages-log' and 'read-only'."
-                )));
-            }
-
-            // Keep track of the regions that need dirty pages log
-            self.dirty_log_slots.write().unwrap().insert(
-                region.slot,
-                KvmDirtyLogSlot {
-                    slot: region.slot,
-                    guest_phys_addr: region.guest_phys_addr,
-                    memory_size: region.memory_size,
-                    userspace_addr: region.userspace_addr,
-                },
-            );
-
-            // Always create guest physical memory region without `KVM_MEM_LOG_DIRTY_PAGES`.
-            // For regions that need this flag, dirty pages log will be turned on in `start_dirty_log`.
-            region.flags = 0;
-        }
+//        if (region.flags & KVM_MEM_LOG_DIRTY_PAGES) != 0 {
+//            if (region.flags & KVM_MEM_READONLY) != 0 {
+//                return Err(vm::HypervisorVmError::CreateUserMemory(anyhow!(
+//                    "Error creating regions with both 'dirty-pages-log' and 'read-only'."
+//                )));
+//            }
+//
+//            // Keep track of the regions that need dirty pages log
+//            self.dirty_log_slots.write().unwrap().insert(
+//                region.slot,
+//                KvmDirtyLogSlot {
+//                    slot: region.slot,
+//                    guest_phys_addr: region.guest_phys_addr,
+//                    memory_size: region.memory_size,
+//                    userspace_addr: region.userspace_addr,
+//                },
+//            );
+//
+//            // Always create guest physical memory region without `KVM_MEM_LOG_DIRTY_PAGES`.
+//            // For regions that need this flag, dirty pages log will be turned on in `start_dirty_log`.
+//            region.flags = 0;
+//        }
 
         #[cfg(feature = "tdx")]
         {
@@ -847,13 +888,15 @@ impl vm::Vm for KvmVm {
             let mut rfd = INVALID_FD;
             let mut roffset = INVALID_ADDR;
 
-            for i in 0..self.restricted_memory.len() {
+            let mut vrm = self.restricted_memory.lock().unwrap();
+
+            for i in 0..vrm.len() {
                 info!("checking restricted_memory slot {}", i);
-                let rgpa = self.restricted_memory[i].gpa;
-                let rsize = self.restricted_memory[i].size;
+                let rgpa = vrm[i].gpa;
+                let rsize = vrm[i].size;
                 if region.guest_phys_addr >= rgpa && region.guest_phys_addr < rgpa + rsize {
                     info!("found registered region at slot {}", i);
-                    rfd = self.restricted_memory[i].memfd;
+                    rfd = vrm[i].memfd;
                     roffset = region.guest_phys_addr - rgpa;
                 }
             }
@@ -862,10 +905,11 @@ impl vm::Vm for KvmVm {
                 panic!("cannot find registred restricted memory!");
             }
 
+            // userspace_addr needs alignment to page start
             let r = set_user_memory_region2(
                     &self.fd.as_raw_fd(),
                     region.slot,
-                    region.flags,
+                    KVM_PRIVATE_MEMORY_ATTRIBUTE_PRIVATE.try_into().unwrap(),
                     region.guest_phys_addr,
                     region.memory_size,
                     region.userspace_addr,
@@ -873,14 +917,20 @@ impl vm::Vm for KvmVm {
                     roffset,
             );
             info!("set_user_memory_region2 returns: {}", r);
+            if r == -1 {
+                info!("set_user_memory_region2 cannot return -1!");
+                info!("{:?}", std::io::Error::last_os_error());
+                unsafe { libc::exit(-1); }
+            }
+            unsafe { libc::exit(-1); }
         }
 
         // SAFETY: Safe because guest regions are guaranteed not to overlap.
-        unsafe {
-            self.fd
-                .set_user_memory_region(region)
-                .map_err(|e| vm::HypervisorVmError::CreateUserMemory(e.into()))
-        }
+        //unsafe {
+        //    self.fd
+        //        .set_user_memory_region(region)
+        //        .map_err(|e| vm::HypervisorVmError::CreateUserMemory(e.into()))
+        //}
     }
 
     ///
@@ -895,11 +945,12 @@ impl vm::Vm for KvmVm {
         // Setting the size to 0 means "remove"
         region.memory_size = 0;
         // SAFETY: Safe because guest regions are guaranteed not to overlap.
-        unsafe {
-            self.fd
-                .set_user_memory_region(region)
-                .map_err(|e| vm::HypervisorVmError::RemoveUserMemory(e.into()))
-        }
+        //unsafe {
+        //    self.fd
+        //        .set_user_memory_region(region)
+        //        .map_err(|e| vm::HypervisorVmError::RemoveUserMemory(e.into()))
+        //}
+        Ok(())
     }
 
     ///
@@ -1404,7 +1455,7 @@ impl hypervisor::Hypervisor for KvmHypervisor {
                 msrs,
                 dirty_log_slots: Arc::new(RwLock::new(HashMap::new())),
                 #[cfg(feature = "tdx")]
-                restricted_memory: vec![],
+                restricted_memory: Arc::new(Mutex::new(vec![])),
             }))
         }
 

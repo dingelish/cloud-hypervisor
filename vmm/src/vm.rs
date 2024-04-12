@@ -2023,8 +2023,7 @@ impl Vm {
         let mem = guest_memory.memory();
 
         // set all memory as private before init each memory region
-        let mut hvm = Arc::get_mut(&mut self.vm).unwrap();
-        hvm.set_all_memory_as_private();
+        self.vm.set_all_memory_as_private();
 
         for section in sections {
             self.vm
@@ -2128,10 +2127,7 @@ impl Vm {
         }
 
         #[cfg(feature = "tdx")]
-        {
-            let mut hvm = Arc::get_mut(&mut self.vm).unwrap();
-            hvm.init_restricted_memory();
-        }
+        self.vm.init_restricted_memory();
 
         #[cfg(feature = "tdx")]
         let (sections, guid_found) = if tdx_enabled {

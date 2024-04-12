@@ -349,12 +349,12 @@ pub trait Vm: Send + Sync + Any {
     }
     #[cfg(feature = "tdx")]
     /// restricted memory
-    fn init_restricted_memory(&mut self) {
+    fn init_restricted_memory(&self) {
         unimplemented!()
     }
     #[cfg(feature = "tdx")]
     /// restricted memory
-    fn set_all_memory_as_private(&mut self) {
+    fn set_all_memory_as_private(&self) {
         unimplemented!()
     }
     #[cfg(feature = "tdx")]
