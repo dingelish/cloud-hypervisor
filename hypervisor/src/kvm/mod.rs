@@ -141,7 +141,7 @@ ioctl_iow_nr!(
     KvmUserspaceMemoryRegion2
 );
 #[cfg(feature = "tdx")]
-ioctl_iow_nr!(KVM_SET_MEMORY_ATTRIBUTES, KVMIO, 0xd3, KvmMemoryAttributes);
+ioctl_iow_nr!(KVM_SET_MEMORY_ATTRIBUTES, KVMIO, 0xd2, KvmMemoryAttributes);
 
 #[cfg(feature = "tdx")]
 #[repr(u32)]
