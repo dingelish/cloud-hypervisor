@@ -1119,13 +1119,25 @@ impl CpuManager {
                                                         warn!("TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT not supported")
                                                     },
                                                     TdxExitDetails::MapGPA => {
+                                                        //https://github.com/intel-staging/qemu-tdx/blob/tdx-qemu-upstream/target/i386/kvm/tdx.c#L922 
                                                         // call kvm_convert_memory(gpa, size, private);
                                                         // where
                                                         // shared_bit=tdx_shared_bit(cpu)
                                                         // gpa = vmcall->in_r12 & ~shared_bit
                                                         // size = vmcall->in_r13
                                                         // private = !(vmcall->in_r12 & shared_bit)
-                                                        panic!("Need to implement kvm_convert_memory!");
+                                                        // cpu -> phys_bits defaults to 47 so tdx_shared_bit = 1<<47
+                                                        //let shared_bit: u64 = 1 << 47;
+                                                        //let gpa: u64 = in_r12 & !shared_bit;
+                                                        //let size: u64 = in_r13;
+                                                        //let private: bool = ((in_r12 & shared_bit) == 0);
+                                                        info!("asking vcpu.handle_map_gpa()");
+                                                        if let Err(e) = vcpu.handle_map_gpa() {
+                                                            error!("Failed to convert memory: {:?}", e);
+                                                            exit_evt.write(1).unwrap();
+                                                            break;
+                                                        };
+                                                        info!("handled without error!");
                                                     },
                                                 },
                                                 Err(e) => error!("Unexpected TDX exit details: {}", e),

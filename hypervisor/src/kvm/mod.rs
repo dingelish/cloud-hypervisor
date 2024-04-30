@@ -2625,6 +2625,9 @@ impl cpu::Vcpu for KvmVcpu {
                     Ok(TdxExitDetails::SetupEventNotifyInterrupt)
                 },
                 TDG_VP_VMCALL_MAP_GPA => {
+                    // https://github.com/intel-staging/qemu-tdx/blob/tdx-qemu-upstream/target/i386/kvm/tdx.c#L922
+                    // static int tdx_handle_map_gpa(X86CPU *cpu, struct kvm_tdx_vmcall *vmcall)
+                    // call kvm_convert_memory(gpa, size, private)
                     Ok(TdxExitDetails::MapGPA)
                 }
                 _x => {
@@ -2653,6 +2656,43 @@ impl cpu::Vcpu for KvmVcpu {
             TdxExitStatus::Success => TDG_VP_VMCALL_SUCCESS,
             TdxExitStatus::InvalidOperand => TDG_VP_VMCALL_INVALID_OPERAND,
         };
+    }
+
+    ///
+    /// Handle MAP_GPA
+    /// Reference https://github.com/intel-staging/qemu-tdx/blob/tdx-qemu-upstream/target/i386/kvm/tdx.c#L924
+    ///
+    #[cfg(feature = "tdx")]
+    fn handle_map_gpa(&mut self) -> cpu::Result<()> {
+        const TDX_SHARED_BIT: u64 = 1 << 47;
+
+        let kvm_run = self.fd.get_kvm_run();
+        // SAFETY: accessing a union field in a valid structure
+        let tdx_exit = unsafe {
+            &mut (*((&mut kvm_run.__bindgen_anon_1) as *mut kvm_run__bindgen_ty_1
+                as *mut KvmTdxExit))
+        };
+
+        let tdx_vmcall = unsafe { &mut tdx_exit.u.vmcall };
+        info!("Handle MAP_GPA: {:?}", tdx_vmcall);
+        // https://github.com/intel-staging/qemu-tdx/blob/tdx-qemu-upstream/target/i386/kvm/tdx.c#L922
+        let in_r12: u64 = tdx_vmcall.in_r12;
+        let in_r13: u64 = tdx_vmcall.in_r13;
+        let gpa: u64 = in_r12 & !TDX_SHARED_BIT;
+        let size: u64 = in_r13;
+        let private: bool = (in_r12 & TDX_SHARED_BIT) == 0;
+
+        let vm_ops = self
+            .vm_ops
+            .as_ref()
+            .ok_or(cpu::HypervisorCpuError::MissingVmOps)?;
+        vm_ops
+            .convert_memory(
+                gpa,
+                size,
+                private,
+            )
+            .map_err(|e| cpu::HypervisorCpuError::RunVcpu(e.into()))
     }
 
     ///

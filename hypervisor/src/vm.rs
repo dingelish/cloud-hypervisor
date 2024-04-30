@@ -459,4 +459,6 @@ pub trait VmOps: Send + Sync {
     fn pio_write(&self, port: u64, data: &[u8]) -> Result<()>;
     #[cfg(feature = "tdx")]
     fn convert_memory(&self, gpa: u64, size: u64, shared_to_private: bool) -> Result<()>;
+    //#[cfg(feature = "tdx")]
+    //fn kvm_convert_memory(&self, gpa: u64, size: u64, shared_to_private: bool) -> Result<()>;
 }

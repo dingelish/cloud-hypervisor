@@ -495,6 +495,11 @@ pub trait Vcpu: Send + Sync {
     fn handle_memory_fault(&mut self) -> Result<()> {
         unimplemented!()
     }
+    #[cfg(feature = "tdx")]
+    ///
+    /// Handle MAP_GPA
+    ///
+    fn handle_map_gpa(&mut self) -> Result<()> ;
     #[cfg(target_arch = "x86_64")]
     ///
     /// Return the list of initial MSR entries for a VCPU

@@ -441,6 +441,19 @@ impl VmOps for VmOpsHandler {
         Ok(())
     }
 
+    //#[cfg(feature = "tdx")]
+    //fn kvm_convert_memory(
+    //    &self,
+    //    gpa: u64,
+    //    size: u64,
+    //    shared_to_private: bool,
+    //) -> result::Result<(), HypervisorVmError> {
+    //    if shared_to_private {
+    //        self.vm.set_memory_attributes_private(gpa, size)?;
+    //    } else {
+    //        self.vm.set_memory_attributes_shared(gpa, size)?;
+    //    }
+    //}
     #[cfg(feature = "tdx")]
     fn convert_memory(
         &self,
@@ -448,6 +461,7 @@ impl VmOps for VmOpsHandler {
         size: u64,
         shared_to_private: bool,
     ) -> result::Result<(), HypervisorVmError> {
+        info!("entered convert_memory");
         // Ignore memory convertion to shared for 32bit PCI MMIO region
         if !shared_to_private
             && gpa >= arch::layout::MEM_32BIT_DEVICES_START.raw_value()
@@ -484,7 +498,7 @@ impl VmOps for VmOpsHandler {
             )
         };
 
-        debug!(
+        info!(
             "convert_memory(): gpa = {:x}, size = {:x}, shared_to_private = {}, \
             offset = {:x}, fo_from = {:?}, fo_to = {:?}, region = {:?}",
             gpa, size, shared_to_private, offset, fo_from, fo_to, region,
