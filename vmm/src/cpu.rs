@@ -1117,7 +1117,16 @@ impl CpuManager {
                                                     TdxExitDetails::GetQuote => warn!("TDG_VP_VMCALL_GET_QUOTE not supported"),
                                                     TdxExitDetails::SetupEventNotifyInterrupt => {
                                                         warn!("TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT not supported")
-                                                    }
+                                                    },
+                                                    TdxExitDetails::MapGPA => {
+                                                        // call kvm_convert_memory(gpa, size, private);
+                                                        // where
+                                                        // shared_bit=tdx_shared_bit(cpu)
+                                                        // gpa = vmcall->in_r12 & ~shared_bit
+                                                        // size = vmcall->in_r13
+                                                        // private = !(vmcall->in_r12 & shared_bit)
+                                                        panic!("Need to implement kvm_convert_memory!");
+                                                    },
                                                 },
                                                 Err(e) => error!("Unexpected TDX exit details: {}", e),
                                             }

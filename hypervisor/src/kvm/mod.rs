@@ -114,6 +114,8 @@ const KVM_EXIT_TDX: u32 = 40;
 #[cfg(feature = "tdx")]
 const KVM_EXIT_MEMORY_FAULT: u32 = 39;
 #[cfg(feature = "tdx")]
+const TDG_VP_VMCALL_MAP_GPA: u64 = 0x10001;
+#[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_GET_QUOTE: u64 = 0x10002;
 #[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT: u64 = 0x10004;
@@ -154,6 +156,7 @@ enum TdxCommand {
 
 #[cfg(feature = "tdx")]
 pub enum TdxExitDetails {
+    MapGPA,
     GetQuote,
     SetupEventNotifyInterrupt,
 }
@@ -212,6 +215,7 @@ impl Default for TdxCapabilities {
 }
 
 #[cfg(feature = "tdx")]
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct KvmTdxExit {
     pub type_: u32,
@@ -2619,8 +2623,14 @@ impl cpu::Vcpu for KvmVcpu {
                 TDG_VP_VMCALL_GET_QUOTE => Ok(TdxExitDetails::GetQuote),
                 TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT => {
                     Ok(TdxExitDetails::SetupEventNotifyInterrupt)
+                },
+                TDG_VP_VMCALL_MAP_GPA => {
+                    Ok(TdxExitDetails::MapGPA)
                 }
-                _ => Err(cpu::HypervisorCpuError::UnknownTdxVmCall),
+                _x => {
+                    info!("handling unknown u3.subfunction: {}", _x);
+                    Err(cpu::HypervisorCpuError::UnknownTdxVmCall)
+                },
             }
         }
     }
