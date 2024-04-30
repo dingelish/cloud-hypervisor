@@ -74,6 +74,8 @@ use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::{cmp, io, result, thread};
+#[cfg(feature = "tdx")]
+use std::os::fd::RawFd;
 use thiserror::Error;
 use tracer::trace_scoped;
 use vm_device::BusDevice;
@@ -630,6 +632,10 @@ impl VcpuState {
 }
 
 impl CpuManager {
+    #[cfg(feature = "tdx")]
+    pub fn get_first_vcpu_rawfd(&self) -> RawFd {
+        self.vcpus[0].lock().unwrap().vcpu.get_vcpu_rawfd().unwrap()
+    }
     #[allow(unused_variables)]
     #[allow(clippy::too_many_arguments)]
     pub fn new(

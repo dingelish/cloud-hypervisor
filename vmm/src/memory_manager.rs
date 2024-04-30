@@ -1096,16 +1096,20 @@ impl MemoryManager {
                 vm.clone(),
             )?;
 
+            info!("Self::create_memory_regions_from_zones completed");
             let mut guest_memory =
                 GuestMemoryMmap::from_arc_regions(mem_regions).map_err(Error::GuestMemory)?;
+            info!("Self::GuestMemoryMmap::from_arc_regions completd");
 
             let boot_guest_memory = guest_memory.clone();
 
             let mut start_of_device_area =
                 MemoryManager::start_addr(guest_memory.last_addr(), allow_mem_hotplug)?;
 
+            info!("updating list of memory zones for resize");
             // Update list of memory zones for resize.
             for zone in zones.iter() {
+                info!("start interating ...");
                 if let Some(memory_zone) = memory_zones.get_mut(&zone.id) {
                     if let Some(hotplug_size) = zone.hotplug_size {
                         if hotplug_size == 0 {
@@ -1170,6 +1174,7 @@ impl MemoryManager {
                     return Err(Error::MissingZoneIdentifier);
                 }
             }
+            info!("iteration completed");
 
             let mut hotplug_slots = Vec::with_capacity(HOTPLUG_COUNT);
             hotplug_slots.resize_with(HOTPLUG_COUNT, HotPlugState::default);
@@ -1218,6 +1223,8 @@ impl MemoryManager {
         #[cfg(feature = "tdx")]
         let dynamic = !tdx_enabled;
 
+        info!("dynamic = {:?}", dynamic);
+
         let acpi_address = if dynamic
             && config.hotplug_method == HotplugMethod::Acpi
             && (config.hotplug_size.unwrap_or_default() > 0)
@@ -1238,6 +1245,7 @@ impl MemoryManager {
         let end_of_ram_area = start_of_device_area.unchecked_sub(1);
         let ram_allocator = AddressAllocator::new(GuestAddress(0), start_of_device_area.0).unwrap();
 
+        info!("creating memorymanager");
         let mut memory_manager = MemoryManager {
             boot_guest_memory,
             guest_memory,
@@ -1276,6 +1284,7 @@ impl MemoryManager {
             tdx_enabled,
         };
 
+        info!("memory manager created");
         #[cfg(target_arch = "aarch64")]
         {
             // For Aarch64 we cannot lazily allocate the address space like we
@@ -1288,11 +1297,13 @@ impl MemoryManager {
             memory_manager.add_uefi_flash()?;
         }
 
+        info!("begin setup sgx");
         #[cfg(target_arch = "x86_64")]
         if let Some(sgx_epc_config) = sgx_epc_config {
             memory_manager.setup_sgx(sgx_epc_config)?;
         }
 
+        info!("sgx setup completed");
         Ok(Arc::new(Mutex::new(memory_manager)))
     }
 
@@ -1454,12 +1465,16 @@ impl MemoryManager {
             // the VFIO pinning
             mmap_flags |= libc::MAP_SHARED;
 
+            info!("before create_anonymouse_file, size = {:x}, hugepages = {}, hugepage_size = {:?}", size, hugepages, hugepage_size);
             let fo = Some(Self::create_anonymous_file(size, hugepages, hugepage_size)?);
+            info!("creating guest_memfd");
             let guest_memfd = vm
                 .create_guest_memfd(size as u64)
                 .map_err(Error::GuestMemfdCreate)?;
+            info!("create_guest_memfd complete, guest_memfd = {:?}", guest_memfd);
             let fo_private = Some(FileOffset::new(guest_memfd, 0));
 
+            info!("creating private mmap region");
             let region = GuestRegionMmap::new_private(
                 MmapRegion::build(fo, size, libc::PROT_READ | libc::PROT_WRITE, mmap_flags)
                     .map_err(Error::GuestMemoryRegion)?,
@@ -1467,6 +1482,7 @@ impl MemoryManager {
                 fo_private,
             )
             .map_err(Error::GuestMemory)?;
+            info!("creating private mmap region completed");
 
             return Ok(Arc::new(region));
         }

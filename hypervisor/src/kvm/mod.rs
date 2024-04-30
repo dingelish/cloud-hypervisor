@@ -40,8 +40,7 @@ use std::os::unix::io::RawFd;
 use std::result;
 #[cfg(target_arch = "x86_64")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_arch = "aarch64")]
-use std::sync::Mutex;
+//#[cfg(target_arch = "aarch64")]
 use std::sync::{Arc, RwLock};
 use vmm_sys_util::eventfd::EventFd;
 // x86_64 dependencies
@@ -111,9 +110,9 @@ pub use {
 const KVM_CAP_SGX_ATTRIBUTE: u32 = 196;
 
 #[cfg(feature = "tdx")]
-const KVM_EXIT_TDX: u32 = 50;
+const KVM_EXIT_TDX: u32 = 40;
 #[cfg(feature = "tdx")]
-const KVM_EXIT_MEMORY_FAULT: u32 = 100;
+const KVM_EXIT_MEMORY_FAULT: u32 = 39;
 #[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_GET_QUOTE: u64 = 0x10002;
 #[cfg(feature = "tdx")]
@@ -149,7 +148,7 @@ enum TdxCommand {
     Capabilities = 0,
     InitVm,
     InitVcpu,
-    InitMemRegion,
+    ExtendMemory,
     Finalize,
 }
 
@@ -686,6 +685,8 @@ impl vm::Vm for KvmVm {
             #[cfg(target_arch = "x86_64")]
             hyperv_synic: AtomicBool::new(false),
         };
+        info!("vcpu created");
+        info!("vcpu fd = {}", vcpu.fd.as_raw_fd());
         Ok(Arc::new(vcpu))
     }
 
@@ -1185,27 +1186,66 @@ impl vm::Vm for KvmVm {
         host_address: u64,
         guest_address: u64,
         size: u64,
-        measure: bool,
+        _measure: bool,
+        vcpufd: i32,
     ) -> vm::Result<()> {
+        //#[repr(C)]
+        //struct KvmMemoryMapping {
+        //    host_address: u64,
+        //    guest_address: u64,
+        //    pages: u64,
+        //}
+        //let data = KvmMemoryMapping {
+        //    host_address,
+        //    guest_address,
+        //    pages: size / 4096,
+        //};
+
+        info!("init_memory_region, host_address: {:x}, guest_address : {:x}, size: {:x}, vcpufd: 0x{:x}", host_address, guest_address, size, vcpufd);
         #[repr(C)]
-        struct TdxInitMemRegion {
-            host_address: u64,
-            guest_address: u64,
-            pages: u64,
+        struct KvmMemoryMapping {
+            base_gfn: u64,
+            nr_pages: u64,
+            flags: u64,
+            source: u64,
         }
-        let data = TdxInitMemRegion {
-            host_address,
-            guest_address,
-            pages: size / 4096,
+        let data = KvmMemoryMapping {
+            base_gfn: guest_address / 4096,
+            nr_pages: size / 4096,
+            flags: 0,
+            source: host_address,
         };
 
-        tdx_command(
+        //#define KVM_MEMORY_MAPPING	_IOWR(KVMIO, 0xd5, struct kvm_memory_mapping)
+        ioctl_iowr_nr!(KVM_MEMORY_MAPPING, KVMIO, 0xd5, KvmMemoryMapping);
+        let mut r = libc::EAGAIN;
+        while r == libc::EAGAIN {
+            r = unsafe { ioctl_with_ref(&vcpufd, KVM_MEMORY_MAPPING(), &data) };
+        }
+        info!("final r = {}", r);
+        let last_os_err = std::io::Error::last_os_error();
+        info!("KVM_MEMORY_MAPPING last os error = {:?}", last_os_err);
+        if r != 0 {
+            return Err(vm::HypervisorVmError::InitMemRegionTdx(last_os_err));
+        }
+
+        let data = KvmMemoryMapping {
+            base_gfn: guest_address / 4096,
+            nr_pages: size / 4096,
+            flags: 0,
+            source: 0,
+        };
+
+        info!("submitting to TdxCommand::ExtendMemory");
+        let result = tdx_command(
             &self.fd.as_raw_fd(),
-            TdxCommand::InitMemRegion,
-            u32::from(measure),
+            TdxCommand::ExtendMemory,
+            0, //u32::from(measure),
             &data as *const _ as u64,
         )
-        .map_err(vm::HypervisorVmError::InitMemRegionTdx)
+        .map_err(vm::HypervisorVmError::InitMemRegionTdx);
+        info!("result = {:?}", result);
+        result
     }
 
     #[cfg(feature = "tdx")]
@@ -1556,6 +1596,8 @@ pub struct KvmVcpu {
 /// let vcpu = vm.create_vcpu(0, None).unwrap();
 /// ```
 impl cpu::Vcpu for KvmVcpu {
+    #[cfg(feature = "tdx")]
+    fn get_vcpu_rawfd(&self) -> cpu::Result<RawFd> { Ok(self.fd.as_raw_fd()) }
     #[cfg(target_arch = "x86_64")]
     ///
     /// Returns the vCPU general purpose registers.

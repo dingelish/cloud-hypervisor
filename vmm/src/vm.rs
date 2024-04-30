@@ -2047,6 +2047,9 @@ impl Vm {
         let guest_memory = self.memory_manager.lock().as_ref().unwrap().guest_memory();
         let mem = guest_memory.memory();
 
+        let vcpu_fd = self.cpu_manager.lock().unwrap().get_first_vcpu_rawfd();
+        info!("first vcpu_rawfd = {}", vcpu_fd);
+
         for section in sections {
             self.vm
                 .set_memory_attributes_private(section.address, section.size)
@@ -2059,6 +2062,7 @@ impl Vm {
                     section.size,
                     /* TDVF_SECTION_ATTRIBUTES_EXTENDMR */
                     section.attributes == 1,
+                    vcpu_fd,
                 )
                 .map_err(Error::InitializeTdxMemoryRegion)?;
         }
@@ -2179,6 +2183,7 @@ impl Vm {
             .unwrap()
             .allocate_address_space()
             .map_err(Error::MemoryManager)?;
+        info!("memory_manager allocate address space completed. next: init_tdx_memory and tdx_finalize");
 
         #[cfg(feature = "tdx")]
         if let Some(hob_address) = hob_address {
@@ -2196,12 +2201,14 @@ impl Vm {
             // With TDX memory and CPU state configured TDX setup is complete
             self.vm.tdx_finalize().map_err(Error::FinalizeTdx)?;
         }
+        info!("hob setup completed. tdx finalized");
 
         self.cpu_manager
             .lock()
             .unwrap()
             .start_boot_vcpus(new_state == VmState::BreakPoint)
             .map_err(Error::CpuManager)?;
+        info!("cpumanager start_boot_vcpus completed");
 
         let mut state = self.state.try_write().map_err(|_| Error::PoisonedState)?;
         *state = new_state;

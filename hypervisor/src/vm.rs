@@ -405,6 +405,7 @@ pub trait Vm: Send + Sync + Any {
         _guest_address: u64,
         _size: u64,
         _measure: bool,
+        _vcpufd: i32,
     ) -> Result<()> {
         unimplemented!()
     }

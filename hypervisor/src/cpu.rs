@@ -16,6 +16,8 @@ use crate::arch::x86::{
 };
 #[cfg(feature = "tdx")]
 use crate::kvm::{TdxExitDetails, TdxExitStatus};
+#[cfg(feature = "tdx")]
+use std::os::fd::RawFd;
 use crate::CpuState;
 use crate::MpState;
 use thiserror::Error;
@@ -457,6 +459,10 @@ pub trait Vcpu: Send + Sync {
     /// Translate guest virtual address to guest physical address
     ///
     fn translate_gva(&self, gva: u64, flags: u64) -> Result<(u64, u32)>;
+    ///
+    /// Get vcpu rawfd
+    #[cfg(feature = "tdx")]
+    fn get_vcpu_rawfd(&self) -> Result<RawFd>;
     ///
     /// Initialize TDX support on the vCPU
     ///
