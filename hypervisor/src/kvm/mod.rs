@@ -115,6 +115,8 @@ const KVM_EXIT_TDX: u32 = 50;
 #[cfg(feature = "tdx")]
 const KVM_EXIT_MEMORY_FAULT: u32 = 100;
 #[cfg(feature = "tdx")]
+const TDG_VP_VMCALL_MAP_GPA: u64 = 0x10001;
+#[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_GET_QUOTE: u64 = 0x10002;
 #[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT: u64 = 0x10004;
@@ -155,6 +157,7 @@ enum TdxCommand {
 
 #[cfg(feature = "tdx")]
 pub enum TdxExitDetails {
+    MapGPA,
     GetQuote,
     SetupEventNotifyInterrupt,
 }
@@ -1121,6 +1124,7 @@ impl vm::Vm for KvmVm {
     #[cfg(feature = "tdx")]
     fn tdx_init(&self, cpuid: &[CpuIdEntry], max_vcpus: u32) -> vm::Result<()> {
         const TDX_ATTR_SEPT_VE_DISABLE: usize = 28;
+        const TDX_ATTR_DEBUG: usize = 0;
         const KVM_CAP_MAX_VCPUS: u32 = 66;
 
         let mut cap = kvm_enable_cap {
@@ -1148,7 +1152,7 @@ impl vm::Vm for KvmVm {
             cpuid_entries: [kvm_bindings::kvm_cpuid_entry2; 256],
         }
         let data = TdxInitVm {
-            attributes: 1 << TDX_ATTR_SEPT_VE_DISABLE,
+            attributes: 1 << TDX_ATTR_DEBUG,
             mrconfigid: [0; 6],
             mrowner: [0; 6],
             mrownerconfig: [0; 6],
@@ -2560,8 +2564,10 @@ impl cpu::Vcpu for KvmVcpu {
                 as *mut KvmTdxExit))
         };
 
+        debug!("received tdx_exit.type = 0x{:x}", tdx_exit.type_);
         if tdx_exit.type_ != KVM_EXIT_TDX_VMCALL {
-            return Err(cpu::HypervisorCpuError::UnknownTdxExitType(tdx_exit.type_));
+            //return Err(cpu::HypervisorCpuError::UnknownTdxExitType(tdx_exit.type_));
+            warn!("received tdx_exit.type = 0x{:x} does not equal to KVM_EXIT_TDX_VMCALL", tdx_exit.type_);
         };
 
         // SAFETY: accessing a union field in a valid structure
@@ -2573,7 +2579,10 @@ impl cpu::Vcpu for KvmVcpu {
                 return Err(cpu::HypervisorCpuError::UnknownTdxVmCall);
             }
 
+            debug!("received tdx_vmcall.u3.subfunction: 0x{:x}", tdx_vmcall.u3.subfunction);
+
             match tdx_vmcall.u3.subfunction {
+                TDG_VP_VMCALL_MAP_GPA => Ok(TdxExitDetails::MapGPA),
                 TDG_VP_VMCALL_GET_QUOTE => Ok(TdxExitDetails::GetQuote),
                 TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT => {
                     Ok(TdxExitDetails::SetupEventNotifyInterrupt)

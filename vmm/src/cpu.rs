@@ -1108,6 +1108,7 @@ impl CpuManager {
                                         if let Some(vcpu) = Arc::get_mut(&mut vcpu.vcpu) {
                                             match vcpu.get_tdx_exit_details() {
                                                 Ok(details) => match details {
+                                                    TdxExitDetails::MapGPA => warn!("Received MapGPA!!!! not supported"),
                                                     TdxExitDetails::GetQuote => warn!("TDG_VP_VMCALL_GET_QUOTE not supported"),
                                                     TdxExitDetails::SetupEventNotifyInterrupt => {
                                                         warn!("TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT not supported")
