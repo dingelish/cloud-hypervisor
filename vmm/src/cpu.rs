@@ -1114,9 +1114,13 @@ impl CpuManager {
                                         if let Some(vcpu) = Arc::get_mut(&mut vcpu.vcpu) {
                                             match vcpu.get_tdx_exit_details() {
                                                 Ok(details) => match details {
-                                                    TdxExitDetails::GetQuote => warn!("TDG_VP_VMCALL_GET_QUOTE not supported"),
+                                                    TdxExitDetails::GetQuote => {
+                                                        warn!("TDG_VP_VMCALL_GET_QUOTE not supported");
+                                                        vcpu.set_tdx_status(TdxExitStatus::InvalidOperand);
+                                                    },
                                                     TdxExitDetails::SetupEventNotifyInterrupt => {
-                                                        warn!("TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT not supported")
+                                                        warn!("TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT not supported");
+                                                        vcpu.set_tdx_status(TdxExitStatus::InvalidOperand);
                                                     },
                                                     TdxExitDetails::MapGPA => {
                                                         //https://github.com/intel-staging/qemu-tdx/blob/tdx-qemu-upstream/target/i386/kvm/tdx.c#L922 
@@ -1138,11 +1142,14 @@ impl CpuManager {
                                                             break;
                                                         };
                                                         info!("handled without error!");
+                                                        vcpu.set_tdx_status(TdxExitStatus::Success); // suspicious
                                                     },
                                                 },
-                                                Err(e) => error!("Unexpected TDX exit details: {}", e),
+                                                Err(e) => {
+                                                    error!("Unexpected TDX exit details: {}", e);
+                                                    vcpu.set_tdx_status(TdxExitStatus::InvalidOperand);
+                                                },
                                             }
-                                            vcpu.set_tdx_status(TdxExitStatus::InvalidOperand);
                                         } else {
                                             // We should never reach this code as
                                             // this means the design from the code
@@ -1152,12 +1159,14 @@ impl CpuManager {
                                     }
                                     #[cfg(feature = "tdx")]
                                     VmExit::MemoryFault => {
+                                        info!("handling MemoryFault");
                                         if let Some(vcpu) = Arc::get_mut(&mut vcpu.vcpu) {
                                             if let Err(e) = vcpu.handle_memory_fault() {
                                                 error!("Failed to convert memory: {:?}", e);
                                                 exit_evt.write(1).unwrap();
                                                 break;
                                             };
+                                            info!("successfully handled MemoryFault");
                                         } else {
                                             // We should never reach this code as
                                             // this means the design from the code
@@ -1165,9 +1174,10 @@ impl CpuManager {
                                             unreachable!("Couldn't get a mutable reference from Arc<dyn Vcpu> as there are multiple instances");
                                         }
                                     }
-                                    _ => {
+                                    _x => {
                                         error!(
-                                            "VCPU generated error: {:?}",
+                                            "VCPU generated error: {:?} {:?}",
+                                            _x,
                                             Error::UnexpectedVmExit
                                         );
                                         vcpu_run_interrupted.store(true, Ordering::SeqCst);
@@ -1175,7 +1185,6 @@ impl CpuManager {
                                         break;
                                     }
                                 },
-
                                 Err(e) => {
                                     error!("VCPU generated error: {:?}", Error::VcpuRun(e.into()));
                                     vcpu_run_interrupted.store(true, Ordering::SeqCst);

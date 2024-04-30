@@ -98,6 +98,9 @@ use vmm_sys_util::{
     ioctl::{ioctl_with_ref, ioctl_with_val},
     ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr,
 };
+//#define KVM_MEMORY_MAPPING	_IOWR(KVMIO, 0xd5, struct kvm_memory_mapping)
+#[cfg(feature = "tdx")]
+ioctl_iowr_nr!(KVM_MEMORY_MAPPING, KVMIO, 0xd5, KvmMemoryMapping);
 ///
 /// Export generically-named wrappers of kvm-bindings for Unix-based platforms
 ///
@@ -122,7 +125,13 @@ const TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT: u64 = 0x10004;
 #[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_SUCCESS: u64 = 0;
 #[cfg(feature = "tdx")]
+const TDG_VP_VMCALL_RETRY: u64 = 1;
+#[cfg(feature = "tdx")]
 const TDG_VP_VMCALL_INVALID_OPERAND: u64 = 0x8000000000000000;
+#[cfg(feature = "tdx")]
+const TDG_VP_VMCALL_GPA_INUSE: u64 = 0x8000000000000001;
+#[cfg(feature = "tdx")]
+const TDG_VP_VMCALL_ALIGN_ERROR: u64 = 0x8000000000000002;
 #[cfg(feature = "tdx")]
 const KVM_MEM_PRIVATE: u32 = 4;
 #[cfg(feature = "tdx")]
@@ -164,11 +173,24 @@ pub enum TdxExitDetails {
 #[cfg(feature = "tdx")]
 pub enum TdxExitStatus {
     Success,
+    Retry,
     InvalidOperand,
+    GpaInUse,
+    AlignError,
 }
 
 #[cfg(feature = "tdx")]
 const TDX_MAX_NR_CPUID_CONFIGS: usize = 15;
+
+#[cfg(feature = "tdx")]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct KvmMemoryMapping {
+    base_gfn: u64,
+    nr_pages: u64,
+    flags: u64,
+    source: u64,
+}
 
 #[cfg(feature = "tdx")]
 #[repr(C)]
@@ -1193,26 +1215,7 @@ impl vm::Vm for KvmVm {
         _measure: bool,
         vcpufd: i32,
     ) -> vm::Result<()> {
-        //#[repr(C)]
-        //struct KvmMemoryMapping {
-        //    host_address: u64,
-        //    guest_address: u64,
-        //    pages: u64,
-        //}
-        //let data = KvmMemoryMapping {
-        //    host_address,
-        //    guest_address,
-        //    pages: size / 4096,
-        //};
-
         info!("init_memory_region, host_address: {:x}, guest_address : {:x}, size: {:x}, vcpufd: 0x{:x}", host_address, guest_address, size, vcpufd);
-        #[repr(C)]
-        struct KvmMemoryMapping {
-            base_gfn: u64,
-            nr_pages: u64,
-            flags: u64,
-            source: u64,
-        }
         let data = KvmMemoryMapping {
             base_gfn: guest_address / 4096,
             nr_pages: size / 4096,
@@ -1220,8 +1223,6 @@ impl vm::Vm for KvmVm {
             source: host_address,
         };
 
-        //#define KVM_MEMORY_MAPPING	_IOWR(KVMIO, 0xd5, struct kvm_memory_mapping)
-        ioctl_iowr_nr!(KVM_MEMORY_MAPPING, KVMIO, 0xd5, KvmMemoryMapping);
         let mut r = libc::EAGAIN;
         while r == libc::EAGAIN {
             r = unsafe { ioctl_with_ref(&vcpufd, KVM_MEMORY_MAPPING(), &data) };
@@ -2654,7 +2655,10 @@ impl cpu::Vcpu for KvmVcpu {
 
         tdx_vmcall.u4.status_code = match status {
             TdxExitStatus::Success => TDG_VP_VMCALL_SUCCESS,
+            TdxExitStatus::Retry => TDG_VP_VMCALL_RETRY,
             TdxExitStatus::InvalidOperand => TDG_VP_VMCALL_INVALID_OPERAND,
+            TdxExitStatus::GpaInUse => TDG_VP_VMCALL_GPA_INUSE,
+            TdxExitStatus::AlignError => TDG_VP_VMCALL_ALIGN_ERROR,
         };
     }
 
